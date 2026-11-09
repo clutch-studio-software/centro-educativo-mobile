@@ -156,6 +156,7 @@ export const useMobilePortalData = (user) => {
       return [];
     }
 
+    setLoading(true);
     try {
       if (isStudentRole) {
         const stSnap = await getDoc(doc(db, 'students', uid));

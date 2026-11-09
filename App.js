@@ -62,9 +62,6 @@ const MobilePortalShell = () => {
       return (
         <View style={styles.centeredContent}>
           <ActivityIndicator size="large" color={COLORS.accent} />
-          <Text style={styles.loadingSubText}>
-            Sincronizando legajos, aranceles y servicios desde Cloud Firestore...
-          </Text>
         </View>
       );
     }
