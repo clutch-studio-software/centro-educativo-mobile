@@ -199,7 +199,7 @@ const MobilePortalShell = () => {
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.brandTitle} numberOfLines={1}>
-              Centro Educativo - {user?.role === 'Padre' ? 'Portal de Padres' : 'Portal de Alumno'}
+              {user?.role === 'Padre' ? 'Portal de Padres' : 'Portal de Alumno'}
             </Text>
             <Text style={styles.userSub} numberOfLines={1}>
               {user?.nombre || user?.email}

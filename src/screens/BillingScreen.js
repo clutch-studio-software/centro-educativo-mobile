@@ -705,17 +705,13 @@ const InvoiceMonthDetailView = ({
           <View key={`${v.id}-${vIdx}`} style={styles.voucherRowCard}>
             <View style={{ flex: 1 }}>
               <Text style={styles.voucherCode}>
-                #{vIdx + 1} · Op: {v.operationCode} ({v.originBank})
+                #{vIdx + 1} · Op: {v.operationCode} - Fecha: {v.operationDate}
               </Text>
               <Text style={styles.voucherMeta}>
-                Fecha: {v.operationDate} · Monto:{' '}
+                 Monto:{' '}
                 {formatCurrencyARS(v.transferredAmount)} · {v.voucherStatus}
               </Text>
-              {v.selectedItemLabels?.length > 0 && (
-                <Text style={styles.voucherItemsCovered}>
-                  Ítems imputados: {v.selectedItemLabels.join(' + ')}
-                </Text>
-              )}
+              
             </View>
             {v.fileUrl ? (
               <TouchableOpacity
@@ -2232,8 +2228,8 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
   },
   voucherRowCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: 'col',
+    alignItems: 'start',
     justifyContent: 'space-between',
     backgroundColor: COLORS.surface,
     padding: 12,
@@ -2246,6 +2242,8 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     color: COLORS.text,
+    textAlign: 'start',
+    width: '120%'
   },
   voucherMeta: {
     fontSize: 11,
@@ -2260,7 +2258,8 @@ const styles = StyleSheet.create({
   },
   openFileBtn: {
     flexDirection: 'row',
-    alignItems: 'center',
+    width: '100%',
+    justifyContent: 'center',
     gap: 4,
     paddingHorizontal: 10,
     paddingVertical: 7,

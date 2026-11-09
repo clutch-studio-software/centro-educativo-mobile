@@ -323,7 +323,7 @@ const TransportRouteCardItem = ({
       <View style={styles.occupancyBarWrap}>
         <View style={styles.occupancyLabels}>
           <Text style={styles.occupancyText}>
-            Mercedes-Benz Sprinter: {occupancy.ocupados}/{occupancy.capacidad} plazas ocupadas
+            Mercedes-Benz Sprinter
           </Text>
           <Text
             style={[
