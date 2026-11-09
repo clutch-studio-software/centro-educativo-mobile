@@ -40,10 +40,10 @@ const LoginScreen = () => {
         err?.code === 'auth/invalid-credential' ||
         err?.message?.includes('invalid-credential')
       ) {
-        setLoginError('Credenciales inválidas. Verifica tu ID o correo.');
+        setLoginError('Usuario o contraseña incorrectos. Por favor revise sus credenciales.');
       } else {
         setLoginError(
-          err?.message || 'Error al iniciar sesión. Revisa tus credenciales.'
+          err?.message || 'Usuario o contraseña incorrectos. Por favor revise sus credenciales.'
         );
       }
     } finally {
@@ -76,13 +76,12 @@ const LoginScreen = () => {
                 <Ionicons name="school" size={36} color="#EA580C" />
               )}
             </View>
-            <Text style={styles.title}>Portal de Acceso</Text>
           </View>
 
           {/* Campo Correo / Legajo */}
           <View style={styles.fieldGroup}>
             <Text style={styles.fieldLabel}>
-              ID de Estudiante o Correo del Tutor
+              Legajo de estudiante o Correo del Tutor
             </Text>
             <View style={styles.inputWrapper}>
               <Ionicons
@@ -94,7 +93,7 @@ const LoginScreen = () => {
                 style={styles.input}
                 value={identifier}
                 onChangeText={setIdentifier}
-                placeholder="ej. EST-2027-42035 o tutor@correo.com"
+                placeholder="EST-2027-1234 o tutor@correo.com"
                 placeholderTextColor="#94A3B8"
                 autoCapitalize="none"
                 autoCorrect={false}
@@ -155,7 +154,6 @@ const LoginScreen = () => {
             ) : (
               <View style={styles.submitBtnInner}>
                 <Text style={styles.submitBtnText}>Iniciar Sesión</Text>
-                <Ionicons name="arrow-forward" size={19} color={COLORS.white} />
               </View>
             )}
           </TouchableOpacity>
@@ -225,14 +223,8 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   logoImage: {
-    width: '100%',
-    height: '100%',
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: '800',
-    color: '#1E293B',
-    letterSpacing: -0.3,
+    width: '120',
+    height: '120',
   },
   fieldGroup: {
     marginBottom: 18,

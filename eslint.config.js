@@ -12,7 +12,10 @@ module.exports = [
       'react-native/split-platform-components': 'off',
       'react-native/no-inline-styles': 'off',
       'react-native/no-color-literals': 'off',
-      'no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
+      'no-unused-vars': [
+        'warn',
+        { argsIgnorePattern: '^_', varsIgnorePattern: '^_', caughtErrorsIgnorePattern: '^_' },
+      ],
     },
   },
   {

@@ -33,6 +33,16 @@ const BANK_OPTIONS = [
   'Mercado Pago',
 ];
 
+const getItemStatusBadge = (itemStatus) => {
+  if (itemStatus === 'conciliado') {
+    return { color: COLORS.emerald, label: '✓ Pagado' };
+  }
+  if (itemStatus === 'en_revision') {
+    return { color: COLORS.amber, label: '⏳ En revisión' };
+  }
+  return { color: COLORS.rose, label: '• Pendiente' };
+};
+
 const BillingScreen = ({
   user,
   linkedStudents = [],
@@ -302,6 +312,634 @@ const BillingScreen = ({
     );
   };
 
+  const renderInvoicesTab = () => (
+    <View style={styles.sectionWrap}>
+      {/* Filtro por Período de Fechas */}
+      <View style={styles.filterCard}>
+        <View style={styles.filterHeader}>
+          <Ionicons name="calendar-outline" size={16} color={COLORS.primary} />
+          <Text style={styles.filterTitle}>
+            Filtrar Facturas y Comprobantes por Período de Fechas
+          </Text>
+        </View>
+
+        <View style={styles.dateInputsRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.smallLabel}>Desde (AAAA-MM-DD)</Text>
+            <TextInput
+              style={styles.dateInput}
+              value={dateFrom}
+              onChangeText={setDateFrom}
+              placeholder="2026-06-01"
+            />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.smallLabel}>Hasta (AAAA-MM-DD)</Text>
+            <TextInput
+              style={styles.dateInput}
+              value={dateTo}
+              onChangeText={setDateTo}
+              placeholder="2026-11-30"
+            />
+          </View>
+        </View>
+
+        <View style={styles.presetRow}>
+          <TouchableOpacity
+            style={styles.presetChip}
+            onPress={() => {
+              setDateFrom('2026-11-01');
+              setDateTo('2026-11-30');
+            }}
+          >
+            <Text style={styles.presetChipText}>Mes Actual (Nov)</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.presetChip}
+            onPress={() => {
+              setDateFrom('2026-09-01');
+              setDateTo('2026-11-30');
+            }}
+          >
+            <Text style={styles.presetChipText}>Últimos 3 Meses</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.presetChip}
+            onPress={() => {
+              setDateFrom('2026-03-01');
+              setDateTo('2026-12-31');
+            }}
+          >
+            <Text style={styles.presetChipText}>Todo el Ciclo 2026</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.statusFilterRow}>
+          {[
+            { id: 'all', label: 'Todas las facturas' },
+            { id: 'pending', label: 'Pendientes' },
+            { id: 'paid', label: 'Conciliadas' },
+          ].map((st) => (
+            <TouchableOpacity
+              key={st.id}
+              style={[
+                styles.statusFilterChip,
+                statusFilter === st.id && styles.statusFilterChipActive,
+              ]}
+              onPress={() => setStatusFilter(st.id)}
+            >
+              <Text
+                style={[
+                  styles.statusFilterText,
+                  statusFilter === st.id && styles.statusFilterTextActive,
+                ]}
+              >
+                {st.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      </View>
+
+      {/* Listado de Facturas y sus Comprobantes Asociados */}
+      {displayedInvoices.map((inv) => (
+        <View key={inv.id} style={styles.invoiceCard}>
+          <View style={styles.invoiceHeader}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.invoicePeriod}>{inv.period}</Text>
+              <Text style={styles.invoiceMeta}>
+                Vencimiento: {inv.dueDate}
+              </Text>
+            </View>
+            {renderStatusBadge(inv.status, inv.statusLabel)}
+          </View>
+
+          <View style={styles.amountsSummaryBar}>
+            <View>
+              <Text style={styles.amountSmallLabel}>Importe Total</Text>
+              <Text style={styles.amountBold}>{formatCurrencyARS(inv.totalAmount)}</Text>
+            </View>
+            <View>
+              <Text style={styles.amountSmallLabel}>Cubierto / En Rev.</Text>
+              <Text style={[styles.amountBold, { color: COLORS.emerald }]}>
+                {formatCurrencyARS(inv.coveredAmount)}
+              </Text>
+            </View>
+            <View>
+              <Text style={styles.amountSmallLabel}>Saldo Pendiente</Text>
+              <Text
+                style={[
+                  styles.amountBold,
+                  { color: inv.pendingBalance > 0 ? COLORS.rose : COLORS.emerald },
+                ]}
+              >
+                {formatCurrencyARS(inv.pendingBalance)}
+              </Text>
+            </View>
+          </View>
+
+          {/* Composición de Ítems de la Factura */}
+          <Text style={styles.subSectionLabel}>
+            COMPOSICIÓN DE ÍTEMS ({inv.items.length}):
+          </Text>
+          <View style={styles.itemsListBox}>
+            {inv.items.map((item) => (
+              <View key={item.id} style={styles.invoiceItemRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.invoiceItemLabel}>{item.label}</Text>
+                  <Text style={styles.invoiceItemSub}>
+                    {item.studentName} · {item.detail}
+                  </Text>
+                </View>
+                <View style={{ alignItems: 'flex-end' }}>
+                  <Text style={styles.invoiceItemAmount}>
+                    {formatCurrencyARS(item.amount)}
+                  </Text>
+                  <Text
+                    style={[
+                      styles.itemMiniBadge,
+                      { color: getItemStatusBadge(item.itemStatus).color },
+                    ]}
+                  >
+                    {getItemStatusBadge(item.itemStatus).label}
+                  </Text>
+                </View>
+              </View>
+            ))}
+          </View>
+
+          {/* Comprobantes de Pago Asociados a esta Factura (Soporta 1 o más comprobantes) */}
+          <View style={styles.vouchersBlock}>
+            <View style={styles.vouchersHeaderRow}>
+              <Ionicons name="document-attach-outline" size={15} color={COLORS.indigo} />
+              <Text style={styles.vouchersHeaderTitle}>
+                Comprobantes de Transferencia Asociados ({inv.vouchers.length})
+              </Text>
+            </View>
+
+            {inv.vouchers.length === 0 ? (
+              <Text style={styles.noVouchersText}>
+                No se registran comprobantes bancarios asociados a esta factura.
+              </Text>
+            ) : (
+              inv.vouchers.map((v, vIdx) => (
+                <View key={`${v.id}-${vIdx}`} style={styles.voucherRowCard}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.voucherCode}>
+                      #{vIdx + 1} · Op: {v.operationCode} ({v.originBank})
+                    </Text>
+                    <Text style={styles.voucherMeta}>
+                      Fecha: {v.operationDate} · Monto:{' '}
+                      {formatCurrencyARS(v.transferredAmount)} · {v.voucherStatus}
+                    </Text>
+                    {v.selectedItemLabels?.length > 0 && (
+                      <Text style={styles.voucherItemsCovered}>
+                        Ítems imputados: {v.selectedItemLabels.join(' + ')}
+                      </Text>
+                    )}
+                  </View>
+                  {v.fileUrl ? (
+                    <TouchableOpacity
+                      style={styles.openFileBtn}
+                      onPress={() => Linking.openURL(v.fileUrl)}
+                    >
+                      <Ionicons name="open-outline" size={14} color={COLORS.emerald} />
+                      <Text style={styles.openFileBtnText}>Ver Archivo</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+              ))
+            )}
+          </View>
+
+          {inv.pendingBalance > 0 && (
+            <TouchableOpacity
+              style={styles.payInvoiceBtn}
+              onPress={() => {
+                setTargetPeriod(inv.period);
+                setSelectedItemIds(
+                  inv.items.filter((i) => !i.isPaidOrInReview).map((i) => i.id)
+                );
+                setCustomAmount(String(inv.pendingBalance));
+                setSubTab('pay');
+              }}
+            >
+              <Ionicons name="card-outline" size={16} color={COLORS.white} />
+              <Text style={styles.payInvoiceBtnText}>
+                Seleccionar Ítems Pendientes y Cargar Comprobante
+              </Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      ))}
+    </View>
+  );
+
+  const renderDebtTab = () => (
+    <View style={styles.sectionWrap}>
+      <View style={styles.debtBanner}>
+        <Ionicons name="analytics-outline" size={20} color={COLORS.rose} />
+        <View style={{ flex: 1 }}>
+          <Text style={styles.debtBannerTitle}>
+            Historial de Deuda Discriminado por Ítem de Pago
+          </Text>
+          <Text style={styles.debtBannerSub}>
+            Visualice cada concepto individual adeudado o en revisión (Cuota Base, Transporte por Recorrido, Comedor y cada Deporte) para el alumno seleccionado.
+          </Text>
+        </View>
+      </View>
+
+      {billingReport.debtItemsHistory.length === 0 ? (
+        <View style={styles.emptyCard}>
+          <Ionicons name="checkmark-done-circle" size={38} color={COLORS.emerald} />
+          <Text style={styles.emptyTitle}>Sin Deuda Registrada en el Período</Text>
+          <Text style={styles.emptySub}>
+            Todos los ítems de cuota, comedor, transporte y deportes se encuentran conciliados.
+          </Text>
+        </View>
+      ) : (
+        billingReport.debtItemsHistory.map((dItem) => (
+          <View key={`${dItem.invoiceId}-${dItem.id}`} style={styles.debtItemCard}>
+            <View style={styles.debtItemHeader}>
+              <View style={styles.categoryPill}>
+                <Text style={styles.categoryPillText}>
+                  {String(dItem.category || 'ARANCEL').toUpperCase()}
+                </Text>
+              </View>
+              <Text style={styles.debtItemPeriod}>
+                Período: {dItem.period} (Vence {dItem.dueDate})
+              </Text>
+            </View>
+
+            <View style={styles.debtItemMainRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.debtItemLabel}>{dItem.label}</Text>
+                <Text style={styles.debtItemStudent}>
+                  Alumno: {dItem.studentName} · {dItem.detail}
+                </Text>
+              </View>
+              <View style={{ alignItems: 'flex-end' }}>
+                <Text style={styles.debtItemAmount}>
+                  {formatCurrencyARS(dItem.amount)}
+                </Text>
+                <Text
+                  style={[
+                    styles.debtItemStatusText,
+                    {
+                      color:
+                        dItem.itemStatus === 'en_revision' ? COLORS.amber : COLORS.rose,
+                    },
+                  ]}
+                >
+                  {dItem.itemStatus === 'en_revision'
+                    ? 'Comprobante en Revisión'
+                    : 'Pendiente de Transferencia'}
+                </Text>
+              </View>
+            </View>
+
+            {dItem.itemStatus === 'pendiente_pago' && (
+              <TouchableOpacity
+                style={styles.paySingleItemBtn}
+                onPress={() => handleQuickPayFromDebtItem(dItem)}
+              >
+                <Ionicons name="arrow-forward-circle-outline" size={15} color={COLORS.accent} />
+                <Text style={styles.paySingleItemBtnText}>
+                  Imputar pago de este ítem por transferencia
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        ))
+      )}
+    </View>
+  );
+
+  const renderPayTab = () => (
+    <View style={styles.sectionWrap}>
+      {/* Datos Bancarios Oficiales (Sin efectivo) */}
+      <View style={styles.bankDataCard}>
+        <View style={styles.bankHeaderRow}>
+          <Ionicons name="business-outline" size={18} color={COLORS.emerald} />
+          <Text style={styles.bankHeaderTitle}>
+            Pago Exclusivo por Transferencia Bancaria (No se admite efectivo)
+          </Text>
+        </View>
+        <Text style={styles.bankLine}>
+          • Banco: <Text style={styles.bankBold}>Banco Santander Río</Text> · Titular:{' '}
+          <Text style={styles.bankBold}>Centro Educativo Integral SRL</Text>
+        </Text>
+        <Text style={styles.bankLine}>
+          • CBU: <Text style={styles.bankBold}>0720026720000001289412</Text> · Alias:{' '}
+          <Text style={[styles.bankBold, { color: COLORS.emerald }]}>
+            COLEGIO.CENTRO.PAGOS
+          </Text>
+        </Text>
+      </View>
+
+      {/* Paso 1: Elegir Período / Factura */}
+      <View style={styles.formSectionCard}>
+        <Text style={styles.stepTitle}>
+          1. Seleccione el Período de Factura a Imputar
+        </Text>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={{ gap: 8, marginTop: 8 }}
+        >
+          {BILLING_PERIODS_CATALOG.slice(0, 3).map((p) => {
+            const active = targetPeriod === p.label;
+            return (
+              <TouchableOpacity
+                key={p.label}
+                style={[styles.periodOption, active && styles.periodOptionActive]}
+                onPress={() => {
+                  setTargetPeriod(p.label);
+                  setSelectedItemIds([]);
+                  setCustomAmount('');
+                }}
+              >
+                <Text
+                  style={[
+                    styles.periodOptionText,
+                    active && styles.periodOptionTextActive,
+                  ]}
+                >
+                  {p.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+
+        {activeInvoiceForPayment?.vouchersCount > 0 && (
+          <View style={styles.multiVoucherNotice}>
+            <Ionicons name="layers-outline" size={16} color={COLORS.indigo} />
+            <Text style={styles.multiVoucherNoticeText}>
+              Esta factura ya cuenta con {activeInvoiceForPayment.vouchersCount}{' '}
+              comprobante(s) cargado(s). Puede adjuntar un nuevo comprobante adicional seleccionando los ítems restantes.
+            </Text>
+          </View>
+        )}
+      </View>
+
+      {/* Paso 2: Seleccionar los Ítems a Pagar */}
+      <View style={styles.formSectionCard}>
+        <View style={styles.stepHeaderBetween}>
+          <Text style={styles.stepTitle}>
+            2. Seleccione los Ítems a Pagar ({selectedItemsObjects.length} elegidos)
+          </Text>
+          <TouchableOpacity onPress={handleSelectAllPending}>
+            <Text style={styles.selectAllLink}>Marcar pendientes</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={{ gap: 8, marginTop: 10 }}>
+          {selectableItems.map((item) => {
+            const checked = effectiveSelectedIds.includes(item.id);
+            return (
+              <TouchableOpacity
+                key={item.id}
+                style={[
+                  styles.checkItemCard,
+                  checked && styles.checkItemCardSelected,
+                ]}
+                onPress={() => toggleItemSelection(item.id)}
+              >
+                <Ionicons
+                  name={checked ? 'checkbox' : 'square-outline'}
+                  size={21}
+                  color={checked ? COLORS.emerald : COLORS.textMuted}
+                />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.checkItemTitle}>{item.label}</Text>
+                  <Text style={styles.checkItemSub}>
+                    {item.studentName} · {item.detail}
+                  </Text>
+                  {item.isPaidOrInReview && (
+                    <Text style={styles.alreadyCoveredTag}>
+                      Ya incluido en comprobante anterior ({item.itemStatus})
+                    </Text>
+                  )}
+                </View>
+                <Text style={styles.checkItemPrice}>
+                  {formatCurrencyARS(item.amount)}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
+        <View style={styles.selectedSubtotalBar}>
+          <Text style={styles.selectedSubtotalLabel}>
+            Total de Ítems Seleccionados:
+          </Text>
+          <Text style={styles.selectedSubtotalValue}>
+            {formatCurrencyARS(selectedItemsTotal)}
+          </Text>
+        </View>
+      </View>
+
+      {/* Paso 3: Datos de la Transferencia y Archivo en Storage */}
+      <View style={styles.formSectionCard}>
+        <Text style={styles.stepTitle}>
+          3. Datos de la Transferencia y Comprobante (Máx. 2 MB)
+        </Text>
+
+        <View style={styles.fieldWrap}>
+          <Text style={styles.inputLabel}>Monto Declarado Transferido ($ ARS) *</Text>
+          <TextInput
+            style={styles.textInput}
+            keyboardType="numeric"
+            value={customAmount !== '' ? customAmount : String(selectedItemsTotal)}
+            onChangeText={setCustomAmount}
+            placeholder="Ej: 110000"
+          />
+        </View>
+
+        <View style={styles.fieldWrap}>
+          <Text style={styles.inputLabel}>Código / Nº de Operación Bancaria *</Text>
+          <TextInput
+            style={styles.textInput}
+            value={operationCode}
+            onChangeText={setOperationCode}
+            placeholder="Ej: TRF-9928310"
+            autoCapitalize="characters"
+          />
+        </View>
+
+        <View style={styles.fieldWrap}>
+          <Text style={styles.inputLabel}>Banco / Billetera de Origen</Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={{ gap: 8, marginTop: 4 }}
+          >
+            {BANK_OPTIONS.map((bank) => (
+              <TouchableOpacity
+                key={bank}
+                style={[
+                  styles.bankChip,
+                  originBank === bank && styles.bankChipActive,
+                ]}
+                onPress={() => setOriginBank(bank)}
+              >
+                <Text
+                  style={[
+                    styles.bankChipText,
+                    originBank === bank && styles.bankChipTextActive,
+                  ]}
+                >
+                  {bank}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+
+        <View style={styles.fieldWrap}>
+          <Text style={styles.inputLabel}>Fecha de Transferencia (AAAA-MM-DD)</Text>
+          <TextInput
+            style={styles.textInput}
+            value={transferDate}
+            onChangeText={setTransferDate}
+            placeholder="2026-11-06"
+          />
+        </View>
+
+        <View style={styles.fieldWrap}>
+          <Text style={styles.inputLabel}>
+            Archivo del Comprobante (.pdf, .png, .jpg, .jpeg — máx. 2 MB) *
+          </Text>
+          <TouchableOpacity
+            style={styles.filePickerBtn}
+            onPress={handlePickVoucherFile}
+          >
+            <Ionicons name="document-attach" size={20} color={COLORS.emerald} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.filePickerTitle}>
+                {pickedFile
+                  ? pickedFile.name
+                  : 'Seleccionar Comprobante Bancario (PDF / Imagen)'}
+              </Text>
+              <Text style={styles.filePickerSub}>
+                {pickedFile
+                  ? `Tamaño: ${formatFileSize(pickedFile.size)} · Tipo: ${pickedFile.mimeType}`
+                  : 'Se almacenará de forma segura en Firebase Storage (vouchers/{uid}/...)'}
+              </Text>
+            </View>
+          </TouchableOpacity>
+        </View>
+
+        <TouchableOpacity
+          style={[styles.submitVoucherBtn, submittingPayment && { opacity: 0.65 }]}
+          onPress={handleSubmitVoucher}
+          disabled={submittingPayment}
+        >
+          {submittingPayment ? (
+            <ActivityIndicator size="small" color={COLORS.white} />
+          ) : (
+            <>
+              <Ionicons name="checkmark-done-circle" size={19} color={COLORS.white} />
+              <Text style={styles.submitVoucherBtnText}>
+                Confirmar Pago y Emitir Comprobante Digital
+              </Text>
+            </>
+          )}
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+
+  const renderEmailsTab = () => (
+    <View style={styles.sectionWrap}>
+      <View style={styles.emailRuleCard}>
+        <View style={styles.emailRuleHeader}>
+          <View style={styles.emailIconBox}>
+            <Ionicons name="calendar" size={20} color={COLORS.emerald} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.emailRuleTitle}>
+              Hito 1: Recordatorio del Último Día Hábil del Mes
+            </Text>
+            <Text style={styles.emailRuleDesc}>
+              Envía por mail a cada padre el total que debe abonar, detallando la composición de ese valor (Cuota + Comedor + Transporte + Deportes) y adjuntando la factura.
+            </Text>
+          </View>
+        </View>
+
+        <TouchableOpacity
+          style={styles.triggerEmailBtn}
+          onPress={() => handleTriggerEmail('reminder')}
+          disabled={sendingEmailType === 'reminder'}
+        >
+          <Ionicons name="send-outline" size={15} color={COLORS.white} />
+          <Text style={styles.triggerEmailBtnText}>
+            {sendingEmailType === 'reminder'
+              ? 'Generando y enviando...'
+              : 'Generar y Enviar Recordatorio de Fin de Mes'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      <View style={styles.emailRuleCard}>
+        <View style={styles.emailRuleHeader}>
+          <View style={[styles.emailIconBox, { backgroundColor: COLORS.roseSoft }]}>
+            <Ionicons name="alert-circle" size={20} color={COLORS.rose} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.emailRuleTitle}>
+              Hito 2: Aviso de Deuda del Día 20 de cada Mes
+            </Text>
+            <Text style={styles.emailRuleDesc}>
+              Envía el día 20 de cada mes a cada padre el estado de deuda discriminado por ítem en caso de no haber registrado el pago completo del período.
+            </Text>
+          </View>
+        </View>
+
+        <TouchableOpacity
+          style={[styles.triggerEmailBtn, { backgroundColor: COLORS.rose }]}
+          onPress={() => handleTriggerEmail('debt20')}
+          disabled={sendingEmailType === 'debt20'}
+        >
+          <Ionicons name="warning-outline" size={15} color={COLORS.white} />
+          <Text style={styles.triggerEmailBtnText}>
+            {sendingEmailType === 'debt20'
+              ? 'Generando aviso...'
+              : 'Generar y Enviar Aviso de Deuda (Día 20)'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {previewEmailPayload && (
+        <View style={styles.emailPreviewCard}>
+          <Text style={styles.emailPreviewTag}>
+            PREVISUALIZACIÓN DEL CORREO GENERADO ({previewEmailPayload.scheduledRule})
+          </Text>
+          <Text style={styles.emailPreviewLine}>
+            Para: <Text style={{ fontWeight: '700' }}>{previewEmailPayload.to}</Text>
+          </Text>
+          <Text style={styles.emailPreviewLine}>
+            Asunto: <Text style={{ fontWeight: '700' }}>{previewEmailPayload.subject}</Text>
+          </Text>
+          <View style={styles.emailPreviewDivider} />
+          {(previewEmailPayload.items || previewEmailPayload.debtItems || []).map(
+            (it, idx) => (
+              <View key={idx} style={styles.emailPreviewItem}>
+                <Text style={styles.emailPreviewItemText}>
+                  • {it.label} ({it.studentName})
+                </Text>
+                <Text style={styles.emailPreviewItemAmount}>
+                  {formatCurrencyARS(it.amount)}
+                </Text>
+              </View>
+            )
+          )}
+        </View>
+      )}
+    </View>
+  );
+
   return (
     <View style={styles.container}>
       {/* Sub-navegación del Módulo 2 */}
@@ -390,644 +1028,16 @@ const BillingScreen = ({
         </View>
 
         {/* SUB-TAB 1: FACTURAS Y COMPROBANTES ASOCIADOS EN UN PERÍODO DE FECHAS */}
-        {subTab === 'invoices' && (
-          <View style={styles.sectionWrap}>
-            {/* Filtro por Período de Fechas */}
-            <View style={styles.filterCard}>
-              <View style={styles.filterHeader}>
-                <Ionicons name="calendar-outline" size={16} color={COLORS.primary} />
-                <Text style={styles.filterTitle}>
-                  Filtrar Facturas y Comprobantes por Período de Fechas
-                </Text>
-              </View>
-
-              <View style={styles.dateInputsRow}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.smallLabel}>Desde (AAAA-MM-DD)</Text>
-                  <TextInput
-                    style={styles.dateInput}
-                    value={dateFrom}
-                    onChangeText={setDateFrom}
-                    placeholder="2026-06-01"
-                  />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.smallLabel}>Hasta (AAAA-MM-DD)</Text>
-                  <TextInput
-                    style={styles.dateInput}
-                    value={dateTo}
-                    onChangeText={setDateTo}
-                    placeholder="2026-11-30"
-                  />
-                </View>
-              </View>
-
-              <View style={styles.presetRow}>
-                <TouchableOpacity
-                  style={styles.presetChip}
-                  onPress={() => {
-                    setDateFrom('2026-11-01');
-                    setDateTo('2026-11-30');
-                  }}
-                >
-                  <Text style={styles.presetChipText}>Mes Actual (Nov)</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.presetChip}
-                  onPress={() => {
-                    setDateFrom('2026-09-01');
-                    setDateTo('2026-11-30');
-                  }}
-                >
-                  <Text style={styles.presetChipText}>Últimos 3 Meses</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.presetChip}
-                  onPress={() => {
-                    setDateFrom('2026-03-01');
-                    setDateTo('2026-12-31');
-                  }}
-                >
-                  <Text style={styles.presetChipText}>Todo el Ciclo 2026</Text>
-                </TouchableOpacity>
-              </View>
-
-              <View style={styles.statusFilterRow}>
-                {[
-                  { id: 'all', label: 'Todas las Cuotas' },
-                  { id: 'pending', label: 'Pendientes / En Revisión' },
-                  { id: 'paid', label: 'Pagadas / Conciliadas' },
-                ].map((st) => (
-                  <TouchableOpacity
-                    key={st.id}
-                    style={[
-                      styles.statusFilterChip,
-                      statusFilter === st.id && styles.statusFilterChipActive,
-                    ]}
-                    onPress={() => setStatusFilter(st.id)}
-                  >
-                    <Text
-                      style={[
-                        styles.statusFilterText,
-                        statusFilter === st.id && styles.statusFilterTextActive,
-                      ]}
-                    >
-                      {st.label}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </View>
-
-            {/* Listado de Facturas y sus Comprobantes Asociados */}
-            {displayedInvoices.map((inv) => (
-              <View key={inv.id} style={styles.invoiceCard}>
-                <View style={styles.invoiceHeader}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.invoicePeriod}>{inv.period}</Text>
-                    <Text style={styles.invoiceMeta}>
-                      Vencimiento: {inv.dueDate} · ID: {inv.id}
-                    </Text>
-                  </View>
-                  {renderStatusBadge(inv.status, inv.statusLabel)}
-                </View>
-
-                <View style={styles.amountsSummaryBar}>
-                  <View>
-                    <Text style={styles.amountSmallLabel}>Importe Total</Text>
-                    <Text style={styles.amountBold}>{formatCurrencyARS(inv.totalAmount)}</Text>
-                  </View>
-                  <View>
-                    <Text style={styles.amountSmallLabel}>Cubierto / En Rev.</Text>
-                    <Text style={[styles.amountBold, { color: COLORS.emerald }]}>
-                      {formatCurrencyARS(inv.coveredAmount)}
-                    </Text>
-                  </View>
-                  <View>
-                    <Text style={styles.amountSmallLabel}>Saldo Pendiente</Text>
-                    <Text
-                      style={[
-                        styles.amountBold,
-                        { color: inv.pendingBalance > 0 ? COLORS.rose : COLORS.emerald },
-                      ]}
-                    >
-                      {formatCurrencyARS(inv.pendingBalance)}
-                    </Text>
-                  </View>
-                </View>
-
-                {/* Composición de Ítems de la Factura */}
-                <Text style={styles.subSectionLabel}>
-                  COMPOSICIÓN DE ÍTEMS ({inv.items.length}):
-                </Text>
-                <View style={styles.itemsListBox}>
-                  {inv.items.map((item) => (
-                    <View key={item.id} style={styles.invoiceItemRow}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.invoiceItemLabel}>{item.label}</Text>
-                        <Text style={styles.invoiceItemSub}>
-                          {item.studentName} · {item.detail}
-                        </Text>
-                      </View>
-                      <View style={{ alignItems: 'flex-end' }}>
-                        <Text style={styles.invoiceItemAmount}>
-                          {formatCurrencyARS(item.amount)}
-                        </Text>
-                        <Text
-                          style={[
-                            styles.itemMiniBadge,
-                            item.itemStatus === 'conciliado'
-                              ? { color: COLORS.emerald }
-                              : item.itemStatus === 'en_revision'
-                                ? { color: COLORS.amber }
-                                : { color: COLORS.rose },
-                          ]}
-                        >
-                          {item.itemStatus === 'conciliado'
-                            ? '✓ Pagado'
-                            : item.itemStatus === 'en_revision'
-                              ? '⏳ En revisión'
-                              : '• Pendiente'}
-                        </Text>
-                      </View>
-                    </View>
-                  ))}
-                </View>
-
-                {/* Comprobantes de Pago Asociados a esta Factura (Soporta 1 o más comprobantes) */}
-                <View style={styles.vouchersBlock}>
-                  <View style={styles.vouchersHeaderRow}>
-                    <Ionicons name="document-attach-outline" size={15} color={COLORS.indigo} />
-                    <Text style={styles.vouchersHeaderTitle}>
-                      Comprobantes de Transferencia Asociados ({inv.vouchers.length})
-                    </Text>
-                  </View>
-
-                  {inv.vouchers.length === 0 ? (
-                    <Text style={styles.noVouchersText}>
-                      No se registran comprobantes bancarios asociados a esta factura.
-                    </Text>
-                  ) : (
-                    inv.vouchers.map((v, vIdx) => (
-                      <View key={`${v.id}-${vIdx}`} style={styles.voucherRowCard}>
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.voucherCode}>
-                            #{vIdx + 1} · Op: {v.operationCode} ({v.originBank})
-                          </Text>
-                          <Text style={styles.voucherMeta}>
-                            Fecha: {v.operationDate} · Monto:{' '}
-                            {formatCurrencyARS(v.transferredAmount)} · {v.voucherStatus}
-                          </Text>
-                          {v.selectedItemLabels?.length > 0 && (
-                            <Text style={styles.voucherItemsCovered}>
-                              Ítems imputados: {v.selectedItemLabels.join(' + ')}
-                            </Text>
-                          )}
-                        </View>
-                        {v.fileUrl ? (
-                          <TouchableOpacity
-                            style={styles.openFileBtn}
-                            onPress={() => Linking.openURL(v.fileUrl)}
-                          >
-                            <Ionicons name="open-outline" size={14} color={COLORS.emerald} />
-                            <Text style={styles.openFileBtnText}>Ver Archivo</Text>
-                          </TouchableOpacity>
-                        ) : null}
-                      </View>
-                    ))
-                  )}
-                </View>
-
-                {inv.pendingBalance > 0 && (
-                  <TouchableOpacity
-                    style={styles.payInvoiceBtn}
-                    onPress={() => {
-                      setTargetPeriod(inv.period);
-                      setSelectedItemIds(
-                        inv.items.filter((i) => !i.isPaidOrInReview).map((i) => i.id)
-                      );
-                      setCustomAmount(String(inv.pendingBalance));
-                      setSubTab('pay');
-                    }}
-                  >
-                    <Ionicons name="card-outline" size={16} color={COLORS.white} />
-                    <Text style={styles.payInvoiceBtnText}>
-                      Seleccionar Ítems Pendientes y Cargar Comprobante
-                    </Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-            ))}
-          </View>
-        )}
+        {subTab === 'invoices' && renderInvoicesTab()}
 
         {/* SUB-TAB 2: HISTORIAL DE DEUDA DISCRIMINADO POR CADA ÍTEM DE PAGO */}
-        {subTab === 'debt' && (
-          <View style={styles.sectionWrap}>
-            <View style={styles.debtBanner}>
-              <Ionicons name="analytics-outline" size={20} color={COLORS.rose} />
-              <View style={{ flex: 1 }}>
-                <Text style={styles.debtBannerTitle}>
-                  Historial de Deuda Discriminado por Ítem de Pago
-                </Text>
-                <Text style={styles.debtBannerSub}>
-                  Visualice cada concepto individual adeudado o en revisión (Cuota Base, Transporte por Recorrido, Comedor y cada Deporte) para el alumno seleccionado.
-                </Text>
-              </View>
-            </View>
-
-            {billingReport.debtItemsHistory.length === 0 ? (
-              <View style={styles.emptyCard}>
-                <Ionicons name="checkmark-done-circle" size={38} color={COLORS.emerald} />
-                <Text style={styles.emptyTitle}>Sin Deuda Registrada en el Período</Text>
-                <Text style={styles.emptySub}>
-                  Todos los ítems de cuota, comedor, transporte y deportes se encuentran conciliados.
-                </Text>
-              </View>
-            ) : (
-              billingReport.debtItemsHistory.map((dItem) => (
-                <View key={`${dItem.invoiceId}-${dItem.id}`} style={styles.debtItemCard}>
-                  <View style={styles.debtItemHeader}>
-                    <View style={styles.categoryPill}>
-                      <Text style={styles.categoryPillText}>
-                        {String(dItem.category || 'ARANCEL').toUpperCase()}
-                      </Text>
-                    </View>
-                    <Text style={styles.debtItemPeriod}>
-                      Período: {dItem.period} (Vence {dItem.dueDate})
-                    </Text>
-                  </View>
-
-                  <View style={styles.debtItemMainRow}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.debtItemLabel}>{dItem.label}</Text>
-                      <Text style={styles.debtItemStudent}>
-                        Alumno: {dItem.studentName} · {dItem.detail}
-                      </Text>
-                    </View>
-                    <View style={{ alignItems: 'flex-end' }}>
-                      <Text style={styles.debtItemAmount}>
-                        {formatCurrencyARS(dItem.amount)}
-                      </Text>
-                      <Text
-                        style={[
-                          styles.debtItemStatusText,
-                          {
-                            color:
-                              dItem.itemStatus === 'en_revision' ? COLORS.amber : COLORS.rose,
-                          },
-                        ]}
-                      >
-                        {dItem.itemStatus === 'en_revision'
-                          ? '⏳ Comprobante en Revisión'
-                          : 'Pendiente de Transferencia'}
-                      </Text>
-                    </View>
-                  </View>
-
-                  {dItem.itemStatus === 'pendiente_pago' && (
-                    <TouchableOpacity
-                      style={styles.paySingleItemBtn}
-                      onPress={() => handleQuickPayFromDebtItem(dItem)}
-                    >
-                      <Ionicons name="arrow-forward-circle-outline" size={15} color={COLORS.accent} />
-                      <Text style={styles.paySingleItemBtnText}>
-                        Imputar pago de este ítem por transferencia
-                      </Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-              ))
-            )}
-          </View>
-        )}
+        {subTab === 'debt' && renderDebtTab()}
 
         {/* SUB-TAB 3: SELECCIONAR ÍTEMS A PAGAR Y CARGAR COMPROBANTE DE TRANSFERENCIA */}
-        {subTab === 'pay' && (
-          <View style={styles.sectionWrap}>
-            {/* Datos Bancarios Oficiales (Sin efectivo) */}
-            <View style={styles.bankDataCard}>
-              <View style={styles.bankHeaderRow}>
-                <Ionicons name="business-outline" size={18} color={COLORS.emerald} />
-                <Text style={styles.bankHeaderTitle}>
-                  Pago Exclusivo por Transferencia Bancaria (No se admite efectivo)
-                </Text>
-              </View>
-              <Text style={styles.bankLine}>
-                • Banco: <Text style={styles.bankBold}>Banco Santander Río</Text> · Titular:{' '}
-                <Text style={styles.bankBold}>Centro Educativo Integral SRL</Text>
-              </Text>
-              <Text style={styles.bankLine}>
-                • CBU: <Text style={styles.bankBold}>0720026720000001289412</Text> · Alias:{' '}
-                <Text style={[styles.bankBold, { color: COLORS.emerald }]}>
-                  COLEGIO.CENTRO.PAGOS
-                </Text>
-              </Text>
-            </View>
-
-            {/* Paso 1: Elegir Período / Factura */}
-            <View style={styles.formSectionCard}>
-              <Text style={styles.stepTitle}>
-                1. Seleccione el Período de Factura a Imputar
-              </Text>
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={{ gap: 8, marginTop: 8 }}
-              >
-                {BILLING_PERIODS_CATALOG.slice(0, 3).map((p) => {
-                  const active = targetPeriod === p.label;
-                  return (
-                    <TouchableOpacity
-                      key={p.label}
-                      style={[styles.periodOption, active && styles.periodOptionActive]}
-                      onPress={() => {
-                        setTargetPeriod(p.label);
-                        setSelectedItemIds([]);
-                        setCustomAmount('');
-                      }}
-                    >
-                      <Text
-                        style={[
-                          styles.periodOptionText,
-                          active && styles.periodOptionTextActive,
-                        ]}
-                      >
-                        {p.label}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </ScrollView>
-
-              {activeInvoiceForPayment?.vouchersCount > 0 && (
-                <View style={styles.multiVoucherNotice}>
-                  <Ionicons name="layers-outline" size={16} color={COLORS.indigo} />
-                  <Text style={styles.multiVoucherNoticeText}>
-                    Esta factura ya cuenta con {activeInvoiceForPayment.vouchersCount}{' '}
-                    comprobante(s) cargado(s). Puede adjuntar un nuevo comprobante adicional seleccionando los ítems restantes.
-                  </Text>
-                </View>
-              )}
-            </View>
-
-            {/* Paso 2: Seleccionar los Ítems a Pagar */}
-            <View style={styles.formSectionCard}>
-              <View style={styles.stepHeaderBetween}>
-                <Text style={styles.stepTitle}>
-                  2. Seleccione los Ítems a Pagar ({selectedItemsObjects.length} elegidos)
-                </Text>
-                <TouchableOpacity onPress={handleSelectAllPending}>
-                  <Text style={styles.selectAllLink}>Marcar pendientes</Text>
-                </TouchableOpacity>
-              </View>
-
-              <View style={{ gap: 8, marginTop: 10 }}>
-                {selectableItems.map((item) => {
-                  const checked = effectiveSelectedIds.includes(item.id);
-                  return (
-                    <TouchableOpacity
-                      key={item.id}
-                      style={[
-                        styles.checkItemCard,
-                        checked && styles.checkItemCardSelected,
-                      ]}
-                      onPress={() => toggleItemSelection(item.id)}
-                    >
-                      <Ionicons
-                        name={checked ? 'checkbox' : 'square-outline'}
-                        size={21}
-                        color={checked ? COLORS.emerald : COLORS.textMuted}
-                      />
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.checkItemTitle}>{item.label}</Text>
-                        <Text style={styles.checkItemSub}>
-                          {item.studentName} · {item.detail}
-                        </Text>
-                        {item.isPaidOrInReview && (
-                          <Text style={styles.alreadyCoveredTag}>
-                            Ya incluido en comprobante anterior ({item.itemStatus})
-                          </Text>
-                        )}
-                      </View>
-                      <Text style={styles.checkItemPrice}>
-                        {formatCurrencyARS(item.amount)}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-
-              <View style={styles.selectedSubtotalBar}>
-                <Text style={styles.selectedSubtotalLabel}>
-                  Total de Ítems Seleccionados:
-                </Text>
-                <Text style={styles.selectedSubtotalValue}>
-                  {formatCurrencyARS(selectedItemsTotal)}
-                </Text>
-              </View>
-            </View>
-
-            {/* Paso 3: Datos de la Transferencia y Archivo en Storage */}
-            <View style={styles.formSectionCard}>
-              <Text style={styles.stepTitle}>
-                3. Datos de la Transferencia y Comprobante (Máx. 2 MB)
-              </Text>
-
-              <View style={styles.fieldWrap}>
-                <Text style={styles.inputLabel}>Monto Declarado Transferido ($ ARS) *</Text>
-                <TextInput
-                  style={styles.textInput}
-                  keyboardType="numeric"
-                  value={customAmount !== '' ? customAmount : String(selectedItemsTotal)}
-                  onChangeText={setCustomAmount}
-                  placeholder="Ej: 110000"
-                />
-              </View>
-
-              <View style={styles.fieldWrap}>
-                <Text style={styles.inputLabel}>Código / Nº de Operación Bancaria *</Text>
-                <TextInput
-                  style={styles.textInput}
-                  value={operationCode}
-                  onChangeText={setOperationCode}
-                  placeholder="Ej: TRF-9928310"
-                  autoCapitalize="characters"
-                />
-              </View>
-
-              <View style={styles.fieldWrap}>
-                <Text style={styles.inputLabel}>Banco / Billetera de Origen</Text>
-                <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={{ gap: 8, marginTop: 4 }}
-                >
-                  {BANK_OPTIONS.map((bank) => (
-                    <TouchableOpacity
-                      key={bank}
-                      style={[
-                        styles.bankChip,
-                        originBank === bank && styles.bankChipActive,
-                      ]}
-                      onPress={() => setOriginBank(bank)}
-                    >
-                      <Text
-                        style={[
-                          styles.bankChipText,
-                          originBank === bank && styles.bankChipTextActive,
-                        ]}
-                      >
-                        {bank}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
-              </View>
-
-              <View style={styles.fieldWrap}>
-                <Text style={styles.inputLabel}>Fecha de Transferencia (AAAA-MM-DD)</Text>
-                <TextInput
-                  style={styles.textInput}
-                  value={transferDate}
-                  onChangeText={setTransferDate}
-                  placeholder="2026-11-06"
-                />
-              </View>
-
-              <View style={styles.fieldWrap}>
-                <Text style={styles.inputLabel}>
-                  Archivo del Comprobante (.pdf, .png, .jpg, .jpeg — máx. 2 MB) *
-                </Text>
-                <TouchableOpacity
-                  style={styles.filePickerBtn}
-                  onPress={handlePickVoucherFile}
-                >
-                  <Ionicons name="document-attach" size={20} color={COLORS.emerald} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.filePickerTitle}>
-                      {pickedFile
-                        ? pickedFile.name
-                        : 'Seleccionar Comprobante Bancario (PDF / Imagen)'}
-                    </Text>
-                    <Text style={styles.filePickerSub}>
-                      {pickedFile
-                        ? `Tamaño: ${formatFileSize(pickedFile.size)} · Tipo: ${pickedFile.mimeType}`
-                        : 'Se almacenará de forma segura en Firebase Storage (vouchers/{uid}/...)'}
-                    </Text>
-                  </View>
-                </TouchableOpacity>
-              </View>
-
-              <TouchableOpacity
-                style={[styles.submitVoucherBtn, submittingPayment && { opacity: 0.65 }]}
-                onPress={handleSubmitVoucher}
-                disabled={submittingPayment}
-              >
-                {submittingPayment ? (
-                  <ActivityIndicator size="small" color={COLORS.white} />
-                ) : (
-                  <>
-                    <Ionicons name="checkmark-done-circle" size={19} color={COLORS.white} />
-                    <Text style={styles.submitVoucherBtnText}>
-                      Confirmar Pago y Emitir Comprobante Digital
-                    </Text>
-                  </>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-        )}
+        {subTab === 'pay' && renderPayTab()}
 
         {/* SUB-TAB 4: AUTOMATIZACIÓN DE NOTIFICACIONES POR CORREO (ÚLTIMO DÍA HÁBIL Y DÍA 20) */}
-        {subTab === 'emails' && (
-          <View style={styles.sectionWrap}>
-            <View style={styles.emailRuleCard}>
-              <View style={styles.emailRuleHeader}>
-                <View style={styles.emailIconBox}>
-                  <Ionicons name="calendar" size={20} color={COLORS.emerald} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.emailRuleTitle}>
-                    Hito 1: Recordatorio del Último Día Hábil del Mes
-                  </Text>
-                  <Text style={styles.emailRuleDesc}>
-                    Envía por mail a cada padre el total que debe abonar, detallando la composición de ese valor (Cuota + Comedor + Transporte + Deportes) y adjuntando la factura.
-                  </Text>
-                </View>
-              </View>
-
-              <TouchableOpacity
-                style={styles.triggerEmailBtn}
-                onPress={() => handleTriggerEmail('reminder')}
-                disabled={sendingEmailType === 'reminder'}
-              >
-                <Ionicons name="send-outline" size={15} color={COLORS.white} />
-                <Text style={styles.triggerEmailBtnText}>
-                  {sendingEmailType === 'reminder'
-                    ? 'Generando y enviando...'
-                    : 'Generar y Enviar Recordatorio de Fin de Mes'}
-                </Text>
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.emailRuleCard}>
-              <View style={styles.emailRuleHeader}>
-                <View style={[styles.emailIconBox, { backgroundColor: COLORS.roseSoft }]}>
-                  <Ionicons name="alert-circle" size={20} color={COLORS.rose} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.emailRuleTitle}>
-                    Hito 2: Aviso de Deuda del Día 20 de cada Mes
-                  </Text>
-                  <Text style={styles.emailRuleDesc}>
-                    Envía el día 20 de cada mes a cada padre el estado de deuda discriminado por ítem en caso de no haber registrado el pago completo del período.
-                  </Text>
-                </View>
-              </View>
-
-              <TouchableOpacity
-                style={[styles.triggerEmailBtn, { backgroundColor: COLORS.rose }]}
-                onPress={() => handleTriggerEmail('debt20')}
-                disabled={sendingEmailType === 'debt20'}
-              >
-                <Ionicons name="warning-outline" size={15} color={COLORS.white} />
-                <Text style={styles.triggerEmailBtnText}>
-                  {sendingEmailType === 'debt20'
-                    ? 'Generando aviso...'
-                    : 'Generar y Enviar Aviso de Deuda (Día 20)'}
-                </Text>
-              </TouchableOpacity>
-            </View>
-
-            {previewEmailPayload && (
-              <View style={styles.emailPreviewCard}>
-                <Text style={styles.emailPreviewTag}>
-                  PREVISUALIZACIÓN DEL CORREO GENERADO ({previewEmailPayload.scheduledRule})
-                </Text>
-                <Text style={styles.emailPreviewLine}>
-                  Para: <Text style={{ fontWeight: '700' }}>{previewEmailPayload.to}</Text>
-                </Text>
-                <Text style={styles.emailPreviewLine}>
-                  Asunto: <Text style={{ fontWeight: '700' }}>{previewEmailPayload.subject}</Text>
-                </Text>
-                <View style={styles.emailPreviewDivider} />
-                {(previewEmailPayload.items || previewEmailPayload.debtItems || []).map(
-                  (it, idx) => (
-                    <View key={idx} style={styles.emailPreviewItem}>
-                      <Text style={styles.emailPreviewItemText}>
-                        • {it.label} ({it.studentName})
-                      </Text>
-                      <Text style={styles.emailPreviewItemAmount}>
-                        {formatCurrencyARS(it.amount)}
-                      </Text>
-                    </View>
-                  )
-                )}
-              </View>
-            )}
-          </View>
-        )}
+        {subTab === 'emails' && renderEmailsTab()}
       </ScrollView>
 
       <DigitalPaymentReceiptModal

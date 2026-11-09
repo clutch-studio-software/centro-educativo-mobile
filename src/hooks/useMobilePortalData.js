@@ -39,6 +39,66 @@ const DEFAULT_SUBJECTS_BY_LEVEL = {
   ],
 };
 
+const parseDaysList = (daysRaw) => {
+  if (Array.isArray(daysRaw)) return daysRaw;
+  if (typeof daysRaw === 'string') {
+    return daysRaw.split(',').map((s) => s.trim()).filter(Boolean);
+  }
+  return [];
+};
+
+const parseTeacherInfo = (profesorRaw) => {
+  if (typeof profesorRaw === 'object' && profesorRaw !== null) {
+    return profesorRaw;
+  }
+  return { nombre: String(profesorRaw || 'Profesor a cargo') };
+};
+
+/**
+ * Consulta y consolida los hijos vinculados a un usuario Padre/Tutor.
+ */
+const fetchParentLinkedStudents = async (uid, user) => {
+  const studentsMap = new Map();
+  let studentIds = Array.isArray(user?.studentIds) ? [...user.studentIds] : [];
+
+  try {
+    const userSnap = await getDoc(doc(db, 'users', uid));
+    if (userSnap.exists()) {
+      const uData = userSnap.data();
+      if (Array.isArray(uData.studentIds)) {
+        studentIds = Array.from(new Set([...studentIds, ...uData.studentIds]));
+      }
+    }
+  } catch (_err) {
+    // Continuar si la lectura falla
+  }
+
+  if (studentIds.length > 0) {
+    const snaps = await Promise.all(
+      studentIds.map((sid) =>
+        getDoc(doc(db, 'students', String(sid).trim())).catch(() => null)
+      )
+    );
+    snaps.forEach((s) => {
+      if (s && s.exists()) {
+        studentsMap.set(s.id, { id: s.id, ...s.data() });
+      }
+    });
+  }
+
+  try {
+    const qParent = query(collection(db, 'students'), where('parentId', '==', uid));
+    const qSnap = await getDocs(qParent);
+    qSnap.forEach((s) => {
+      studentsMap.set(s.id, { id: s.id, ...s.data() });
+    });
+  } catch (_err) {
+    // Continuar si la consulta por parentId no está habilitada
+  }
+
+  return Array.from(studentsMap.values());
+};
+
 export const resolveStudentSubjects = (student, subjectsCatalog = [], coursesCatalog = []) => {
   if (!student) return [];
   const rawCurso = String(student.curso || '').trim().toLowerCase();
@@ -85,9 +145,10 @@ export const useMobilePortalData = (user) => {
   const isParentRole = !isStudentRole;
 
   /**
-   * Carga inicial y suscripción en tiempo real a los hijos vinculados del tutor
+   * Carga inicial y suscripción a los hijos vinculados del usuario
    */
   const fetchLinkedChildren = useCallback(async () => {
+    await Promise.resolve();
     const uid = auth.currentUser?.uid || user?.uid;
     if (!uid) {
       setLinkedStudents([]);
@@ -95,97 +156,59 @@ export const useMobilePortalData = (user) => {
       return [];
     }
 
-    const studentsMap = new Map();
-
+    setLoading(true);
     try {
       if (isStudentRole) {
         const stSnap = await getDoc(doc(db, 'students', uid));
-        if (stSnap.exists()) {
-          studentsMap.set(stSnap.id, { id: stSnap.id, ...stSnap.data() });
-        }
-      } else {
-        // 1. Obtener studentIds desde users/{uid}
-        let studentIdsFromProfile = Array.isArray(user?.studentIds) ? [...user.studentIds] : [];
-        try {
-          const userSnap = await getDoc(doc(db, 'users', uid));
-          if (userSnap.exists()) {
-            const uData = userSnap.data();
-            if (Array.isArray(uData.studentIds)) {
-              studentIdsFromProfile = Array.from(
-                new Set([...studentIdsFromProfile, ...uData.studentIds])
-              );
-            }
-          }
-        } catch {
-          // Continuar
-        }
-
-        // 2. Leer cada documento students/{studentId}
-        if (studentIdsFromProfile.length > 0) {
-          const snaps = await Promise.all(
-            studentIdsFromProfile.map((sid) =>
-              getDoc(doc(db, 'students', String(sid).trim())).catch(() => null)
-            )
-          );
-          snaps.forEach((s) => {
-            if (s && s.exists()) {
-              studentsMap.set(s.id, { id: s.id, ...s.data() });
-            }
-          });
-        }
-
-        // 3. Consultar también por where('parentId', '==', uid)
-        try {
-          const qParent = query(collection(db, 'students'), where('parentId', '==', uid));
-          const qSnap = await getDocs(qParent);
-          qSnap.forEach((s) => {
-            studentsMap.set(s.id, { id: s.id, ...s.data() });
-          });
-        } catch {
-          // Continuar si la regla requiere lectura individual
-        }
+        const list = stSnap.exists() ? [{ id: stSnap.id, ...stSnap.data() }] : [];
+        setLinkedStudents(list);
+        setSelectedStudentId(list[0]?.id || null);
+        setLoading(false);
+        return list;
       }
+
+      const list = await fetchParentLinkedStudents(uid, user);
+      setLinkedStudents(list);
+      setSelectedStudentId((prev) => {
+        if (prev && list.some((s) => String(s.id) === String(prev))) return prev;
+        return list[0]?.id || null;
+      });
+      setLoading(false);
+      return list;
     } catch (err) {
       console.warn('Error cargando alumnos vinculados:', err?.message);
+      setLoading(false);
+      return [];
     }
-
-    const list = Array.from(studentsMap.values());
-    setLinkedStudents(list);
-    setSelectedStudentId((prev) => {
-      if (prev && list.some((s) => String(s.id) === String(prev))) return prev;
-      return list[0]?.id || null;
-    });
-    setLoading(false);
-    return list;
   }, [user, isStudentRole]);
 
-  // Suscripción en tiempo real a cada hijo vinculado
+  // Listener para sincronización en tiempo real de los estudiantes vinculados
   useEffect(() => {
     let active = true;
     let unsubStudents = [];
 
-    const setupStudentListeners = async () => {
-      setLoading(true);
-      const initialList = await fetchLinkedChildren();
-      if (!active || initialList.length === 0) return;
-
-      unsubStudents = initialList.map((st) =>
-        onSnapshot(
-          doc(db, 'students', st.id),
-          (snap) => {
-            if (snap.exists() && active) {
-              const updated = { id: snap.id, ...snap.data() };
-              setLinkedStudents((prev) =>
-                prev.map((item) => (String(item.id) === String(updated.id) ? updated : item))
-              );
-            }
-          },
-          () => {}
-        )
-      );
+    const handleStudentSnapshot = (snap) => {
+      if (snap.exists() && active) {
+        const updated = { id: snap.id, ...snap.data() };
+        setLinkedStudents((prev) =>
+          prev.map((item) => (String(item.id) === String(updated.id) ? updated : item))
+        );
+      }
     };
 
-    void setupStudentListeners();
+    const syncChildren = async () => {
+      try {
+        const initialList = await fetchLinkedChildren();
+        if (!active || !initialList || initialList.length === 0) return;
+        unsubStudents = initialList.map((st) =>
+          onSnapshot(doc(db, 'students', st.id), handleStudentSnapshot, () => undefined)
+        );
+      } catch (_err) {
+        // ignore
+      }
+    };
+
+    void syncChildren();
 
     return () => {
       active = false;
@@ -206,7 +229,7 @@ export const useMobilePortalData = (user) => {
           setTariffsConfig(snap.data());
         }
       },
-      () => {}
+      () => undefined
     );
 
     // 2. Catálogo de Deportes Extracurriculares
@@ -222,29 +245,22 @@ export const useMobilePortalData = (user) => {
               id: d.id,
               nombre: data.nombre || data.name || 'Disciplina',
               emoji: data.emoji || '🏅',
-              profesor:
-                typeof data.profesor === 'object' && data.profesor !== null
-                  ? data.profesor
-                  : { nombre: String(data.profesor || data.entrenador || 'Profesor a cargo') },
+              profesor: parseTeacherInfo(data.profesor || data.entrenador),
               niveles: data.niveles || data.nivel || 'Todos los niveles',
-              dias: Array.isArray(data.dias)
-                ? data.dias
-                : typeof data.dias === 'string'
-                  ? data.dias.split(',').map((s) => s.trim()).filter(Boolean)
-                  : [],
+              dias: parseDaysList(data.dias),
               horario: data.horario || data.schedule || '16:00 - 17:30 hs',
               lugar: data.lugar || data.instalacion || 'Campo de Deportes',
               cupoMax: Number(data.cupoMax || data.cupo) || 25,
               cupoOcupado: inscriptos.length || Number(data.cupoOcupado || data.anotados) || 0,
               precioMensual: Number(data.precioMensual || data.price || data.precio) || 0,
-              activo: data.activo !== false,
+              activo: Boolean(data.activo !== false),
               inscriptos,
             });
           });
           setAllDisciplines(list);
         }
       },
-      () => {}
+      () => undefined
     );
 
     // 3. Facturas y Comprobantes en finance_receipts
@@ -257,7 +273,7 @@ export const useMobilePortalData = (user) => {
         });
         setFinanceReceipts(list);
       },
-      () => {}
+      () => undefined
     );
 
     // 4. Oferta académica (Cursos y Profesores por materia)
@@ -277,7 +293,7 @@ export const useMobilePortalData = (user) => {
         });
         setCoursesCatalog(courses);
       },
-      () => {}
+      () => undefined
     );
 
     return () => {
@@ -286,24 +302,28 @@ export const useMobilePortalData = (user) => {
       unsubReceipts();
       unsubAcademic();
     };
-  }, [user?.uid]);
+  }, [user]);
 
+  // Alumno actualmente seleccionado
   const currentStudent = useMemo(() => {
-    if (!linkedStudents.length) return null;
+    if (selectedStudentId === 'all') return null;
     return (
       linkedStudents.find((s) => String(s.id) === String(selectedStudentId)) ||
-      linkedStudents[0]
+      linkedStudents[0] ||
+      null
     );
   }, [linkedStudents, selectedStudentId]);
 
+  // Materias resueltas del alumno actual
   const currentStudentSubjects = useMemo(() => {
     return resolveStudentSubjects(currentStudent, subjectsCatalog, coursesCatalog);
   }, [currentStudent, subjectsCatalog, coursesCatalog]);
 
+  // Actualizador manual de estudiante en el estado local
   const updateStudentInState = useCallback((updatedStudent) => {
     if (!updatedStudent?.id) return;
     setLinkedStudents((prev) =>
-      prev.map((st) => (String(st.id) === String(updatedStudent.id) ? { ...st, ...updatedStudent } : st))
+      prev.map((s) => (String(s.id) === String(updatedStudent.id) ? { ...s, ...updatedStudent } : s))
     );
   }, []);
 
@@ -320,7 +340,7 @@ export const useMobilePortalData = (user) => {
     allDisciplines,
     routes: TRANSPORT_ROUTES,
     financeReceipts,
-    refreshPortalData: fetchLinkedChildren,
     updateStudentInState,
+    refreshData: fetchLinkedChildren,
   };
 };

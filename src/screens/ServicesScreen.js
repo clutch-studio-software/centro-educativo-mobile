@@ -35,6 +35,471 @@ import {
   getSportMonthlyPrice,
 } from '../services/billingMobileService';
 
+const resolveCancellationPolicyHint = ({ isScheduledCancel, bajaProgramada, canCancelNow }) => {
+  if (isScheduledCancel) {
+    return `Baja programada para el ${formatDateDisplay(bajaProgramada)}`;
+  }
+  if (canCancelNow) {
+    return 'Baja inmediata disponible hoy (mismo día de alta)';
+  }
+  return 'Baja diferida al 1º del próximo mes';
+};
+
+const resolveWithdrawButtonText = ({ isScheduledCancel, bajaProgramada, canCancelNow }) => {
+  if (isScheduledCancel) {
+    return `Baja ya solicitada (${formatDateDisplay(bajaProgramada)})`;
+  }
+  if (canCancelNow) {
+    return 'Cancelar Inscripción Hoy (Inmediata)';
+  }
+  return 'Solicitar Baja para el Próximo Mes';
+};
+
+const resolveSportEnrollButtonText = ({ isFull, conflict, reachedMaxSports, sportName }) => {
+  if (isFull) return 'Cupo Completo';
+  if (conflict) return 'Bloqueado por Superposición Horaria';
+  if (reachedMaxSports) return 'Máximo 2 Deportes Alcanzado';
+  return `Inscribir en ${sportName}`;
+};
+
+const resolveRouteEnrollButtonText = ({ isCurrentRoute, estaLleno, routeId }) => {
+  if (isCurrentRoute) return 'Recorrido Actualmente Activo';
+  if (estaLleno) return 'Unidad Sprinter Completa (15/15)';
+  return `Seleccionar ${routeId}`;
+};
+
+const resolveDiningPolicyHint = ({ bajaSolicitada, bajaProgramada, canCancelToday }) => {
+  if (bajaSolicitada) {
+    return `Baja programada para el ${formatDateDisplay(bajaProgramada)}`;
+  }
+  if (canCancelToday) {
+    return 'Cancelación inmediata disponible hoy';
+  }
+  return 'Baja diferida al 1º del próximo mes';
+};
+
+const resolveDiningButtonText = ({ bajaSolicitada, bajaProgramada, canCancelToday }) => {
+  if (bajaSolicitada) {
+    return `Baja Programada (${formatDateDisplay(bajaProgramada)})`;
+  }
+  if (canCancelToday) {
+    return 'Cancelar Comedor Hoy (Baja Inmediata)';
+  }
+  return 'Solicitar Baja para el Próximo Mes';
+};
+
+const SportCardItem = ({
+  disc,
+  student,
+  enrolledDisciplines,
+  tariffsConfig,
+  isStudentRole,
+  isBusy,
+  onEnroll,
+  onWithdraw,
+}) => {
+  const isEnrolled = isStudentEnrolledInDiscipline(student, disc);
+  const subInfo = student.deportesSuscripciones?.[disc.id] || {};
+  const startDate = subInfo.fechaInicio || student.deporteFechaInicio;
+  const canCancelNow = canCancelServiceToday(startDate);
+  const isScheduledCancel = Boolean(subInfo.bajaSolicitada);
+
+  const monthlyRate = getSportMonthlyPrice(disc, tariffsConfig);
+  const propInfo = calculateMonthlyProportional({
+    startDate: isEnrolled ? startDate : new Date(),
+    monthlyRate,
+  });
+
+  const conflict = !isEnrolled
+    ? checkScheduleConflict(enrolledDisciplines, disc)
+    : null;
+  const cupoMax = Number(disc.cupoMax) || 25;
+  const cupoOcupado = Number(disc.cupoOcupado) || (disc.inscriptos?.length || 0);
+  const isFull = cupoOcupado >= cupoMax && !isEnrolled;
+  const reachedMaxSports = enrolledDisciplines.length >= 2 && !isEnrolled;
+
+  const cancellationHint = resolveCancellationPolicyHint({
+    isScheduledCancel,
+    bajaProgramada: subInfo.bajaProgramada,
+    canCancelNow,
+  });
+
+  const withdrawText = resolveWithdrawButtonText({
+    isScheduledCancel,
+    bajaProgramada: subInfo.bajaProgramada,
+    canCancelNow,
+  });
+
+  const enrollText = resolveSportEnrollButtonText({
+    isFull,
+    conflict,
+    reachedMaxSports,
+    sportName: disc.nombre,
+  });
+
+  return (
+    <View style={[styles.serviceCard, isEnrolled && styles.serviceCardEnrolled]}>
+      <View style={styles.sportTopRow}>
+        <View style={styles.emojiBox}>
+          <Text style={{ fontSize: 20 }}>{disc.emoji || '🏅'}</Text>
+        </View>
+        <View style={{ flex: 1 }}>
+          <View style={styles.titleWithBadge}>
+            <Text style={styles.sportName}>{disc.nombre}</Text>
+            {isEnrolled && (
+              <View style={styles.activePill}>
+                <Text style={styles.activePillText}>INSCRIPTO</Text>
+              </View>
+            )}
+          </View>
+          <Text style={styles.sportTeacher}>
+            Profesor responsable: {disc.profesor?.nombre || 'Docente asignado'}
+          </Text>
+          <Text style={styles.sportSchedule}>
+            {disc.horario} · {disc.lugar}
+          </Text>
+        </View>
+        <View style={{ alignItems: 'flex-end' }}>
+          <Text style={styles.priceTag}>{formatCurrencyARS(monthlyRate)}/mes</Text>
+          <Text style={styles.propSmallTag}>
+            1º mes prop.: {propInfo.formattedProportional}
+          </Text>
+        </View>
+      </View>
+
+      <View style={styles.metaStrip}>
+        <Text style={styles.metaStripText}>
+          Nivel: {disc.niveles || 'Todos'}
+        </Text>
+        <Text style={styles.metaStripText}>
+          Vacantes: {cupoOcupado}/{cupoMax} ocupadas
+        </Text>
+      </View>
+
+      {conflict && !isEnrolled && (
+        <View style={styles.conflictBox}>
+          <Ionicons name="warning" size={15} color={COLORS.rose} />
+          <Text style={styles.conflictText}>
+            Conflicto de horario: {conflict.overlapLabel}
+          </Text>
+        </View>
+      )}
+
+      {isEnrolled && (
+        <View style={styles.subscriptionStatusBox}>
+          <Text style={styles.subscriptionStatusText}>
+            Fecha de alta: {formatDateDisplay(startDate)} · {cancellationHint}
+          </Text>
+        </View>
+      )}
+
+      {!isStudentRole && (
+        <View style={styles.cardActionRow}>
+          {isEnrolled ? (
+            <TouchableOpacity
+              style={[
+                styles.withdrawBtn,
+                isScheduledCancel && { opacity: 0.55 },
+              ]}
+              onPress={() => onWithdraw(disc)}
+              disabled={isBusy || isScheduledCancel}
+            >
+              {isBusy ? (
+                <ActivityIndicator size="small" color={COLORS.rose} />
+              ) : (
+                <>
+                  <Ionicons
+                    name="close-circle-outline"
+                    size={16}
+                    color={COLORS.rose}
+                  />
+                  <Text style={styles.withdrawBtnText}>{withdrawText}</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              style={[
+                styles.enrollBtn,
+                (Boolean(conflict) || isFull || reachedMaxSports) &&
+                  styles.enrollBtnDisabled,
+              ]}
+              onPress={() => onEnroll(disc)}
+              disabled={
+                isBusy || Boolean(conflict) || isFull || reachedMaxSports
+              }
+            >
+              {isBusy ? (
+                <ActivityIndicator size="small" color={COLORS.white} />
+              ) : (
+                <>
+                  <Ionicons
+                    name="add-circle-outline"
+                    size={16}
+                    color={COLORS.white}
+                  />
+                  <Text style={styles.enrollBtnText}>{enrollText}</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
+    </View>
+  );
+};
+
+const TransportRouteCardItem = ({
+  route,
+  student,
+  studentRoute,
+  allStudents,
+  routes,
+  tariffsConfig,
+  isStudentRole,
+  isBusy,
+  onEnrollRoute,
+}) => {
+  const occupancy = getTransportRouteOccupancy(
+    route.id,
+    allStudents,
+    routes,
+    SPRINTER_STANDARD_CAPACITY
+  );
+  const isCurrentRoute =
+    studentRoute &&
+    (studentRoute.id === route.id || studentRoute.code === route.code);
+  const monthlyPrice = getRouteMonthlyPrice(route.id, tariffsConfig);
+  const prop = calculateMonthlyProportional({
+    startDate: isCurrentRoute ? student.transporteFechaInicio : new Date(),
+    monthlyRate: monthlyPrice,
+  });
+
+  const buttonText = resolveRouteEnrollButtonText({
+    isCurrentRoute,
+    estaLleno: occupancy.estaLleno,
+    routeId: route.id,
+  });
+
+  return (
+    <View
+      key={route.id}
+      style={[
+        styles.serviceCard,
+        isCurrentRoute && styles.serviceCardEnrolled,
+      ]}
+    >
+      <View style={styles.sportTopRow}>
+        <View style={[styles.emojiBox, { backgroundColor: COLORS.cyanSoft }]}>
+          <Ionicons name="bus" size={20} color={COLORS.cyan} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.sportName}>{route.nombre}</Text>
+          <Text style={styles.sportTeacher}>Zona: {route.zona}</Text>
+          <Text style={styles.sportSchedule}>
+            Ida: {route.horarioIda} · Regreso: {route.horarioRegreso}
+          </Text>
+        </View>
+        <View style={{ alignItems: 'flex-end' }}>
+          <Text style={styles.priceTag}>
+            {formatCurrencyARS(monthlyPrice)}/mes
+          </Text>
+          <Text style={styles.propSmallTag}>
+            Prop. hoy: {prop.formattedProportional}
+          </Text>
+        </View>
+      </View>
+
+      <View style={styles.occupancyBarWrap}>
+        <View style={styles.occupancyLabels}>
+          <Text style={styles.occupancyText}>
+            Mercedes-Benz Sprinter: {occupancy.ocupados}/{occupancy.capacidad} plazas ocupadas
+          </Text>
+          <Text
+            style={[
+              styles.occupancyFreeText,
+              { color: occupancy.estaLleno ? COLORS.rose : COLORS.emerald },
+            ]}
+          >
+            {occupancy.estaLleno
+              ? 'SIN VACANTES (15/15)'
+              : `${occupancy.disponibles} plazas libres`}
+          </Text>
+        </View>
+        <View style={styles.progressTrack}>
+          <View
+            style={[
+              styles.progressFill,
+              {
+                width: `${occupancy.porcentaje}%`,
+                backgroundColor: occupancy.estaLleno
+                  ? COLORS.rose
+                  : COLORS.emerald,
+              },
+            ]}
+          />
+        </View>
+      </View>
+
+      {!isStudentRole && (
+        <TouchableOpacity
+          style={[
+            styles.enrollBtn,
+            (isCurrentRoute || occupancy.estaLleno) &&
+              styles.enrollBtnDisabled,
+          ]}
+          onPress={() => onEnrollRoute(route)}
+          disabled={isBusy || isCurrentRoute || occupancy.estaLleno}
+        >
+          {isBusy ? (
+            <ActivityIndicator size="small" color={COLORS.white} />
+          ) : (
+            <Text style={styles.enrollBtnText}>{buttonText}</Text>
+          )}
+        </TouchableOpacity>
+      )}
+    </View>
+  );
+};
+
+const DiningCardItem = ({
+  student,
+  isDiningActive,
+  diningPrice,
+  diningNotes,
+  setDiningNotes,
+  isStudentRole,
+  processingKey,
+  onSaveNotes,
+  onToggleDining,
+}) => {
+  const policyHint = resolveDiningPolicyHint({
+    bajaSolicitada: student.comedorBajaSolicitada,
+    bajaProgramada: student.comedorBajaProgramada,
+    canCancelToday: canCancelServiceToday(student.comedorFechaInicio),
+  });
+
+  const buttonText = resolveDiningButtonText({
+    bajaSolicitada: student.comedorBajaSolicitada,
+    bajaProgramada: student.comedorBajaProgramada,
+    canCancelToday: canCancelServiceToday(student.comedorFechaInicio),
+  });
+
+  return (
+    <View
+      style={[
+        styles.serviceCard,
+        isDiningActive && styles.serviceCardEnrolled,
+      ]}
+    >
+      <View style={styles.sportTopRow}>
+        <View style={[styles.emojiBox, { backgroundColor: COLORS.accentSoft }]}>
+          <Ionicons name="restaurant" size={20} color={COLORS.accent} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <View style={styles.titleWithBadge}>
+            <Text style={styles.sportName}>
+              Servicio de Comedor Escolar Mensual
+            </Text>
+            {isDiningActive && (
+              <View style={styles.activePill}>
+                <Text style={styles.activePillText}>ACTIVO</Text>
+              </View>
+            )}
+          </View>
+          <Text style={styles.sportTeacher}>
+            Almuerzo nutricional supervisado para jornada extendida
+          </Text>
+        </View>
+        <View style={{ alignItems: 'flex-end' }}>
+          <Text style={styles.priceTag}>
+            {formatCurrencyARS(diningPrice)}/mes
+          </Text>
+          <Text style={styles.propSmallTag}>
+            Prop. mes:{' '}
+            {
+              calculateMonthlyProportional({
+                startDate: isDiningActive
+                  ? student.comedorFechaInicio
+                  : new Date(),
+                monthlyRate: diningPrice,
+              }).formattedProportional
+            }
+          </Text>
+        </View>
+      </View>
+
+      {isDiningActive && (
+        <View style={styles.subscriptionStatusBox}>
+          <Text style={styles.subscriptionStatusText}>
+            Fecha de alta: {formatDateDisplay(student.comedorFechaInicio)} · {policyHint}
+          </Text>
+        </View>
+      )}
+
+      <View style={{ gap: 6, marginTop: 4 }}>
+        <Text style={styles.smallInputLabel}>
+          Observaciones Nutricionales / Restricciones Alimentarias (Celiaquía, Alergias, etc.)
+        </Text>
+        <TextInput
+          style={styles.notesInput}
+          value={diningNotes}
+          onChangeText={setDiningNotes}
+          editable={!isStudentRole}
+          placeholder="Ej: Sin restricciones alimentarias / Menú apto celíaco"
+        />
+        {!isStudentRole && (
+          <TouchableOpacity
+            style={styles.saveNotesBtn}
+            onPress={onSaveNotes}
+            disabled={processingKey === 'save-dining-notes'}
+          >
+            <Ionicons name="save-outline" size={14} color={COLORS.indigo} />
+            <Text style={styles.saveNotesBtnText}>
+              Guardar Observaciones de Comedor
+            </Text>
+          </TouchableOpacity>
+        )}
+      </View>
+
+      {!isStudentRole && (
+        <View style={styles.cardActionRow}>
+          {isDiningActive ? (
+            <TouchableOpacity
+              style={[
+                styles.withdrawBtn,
+                student.comedorBajaSolicitada && { opacity: 0.55 },
+              ]}
+              onPress={() => onToggleDining(false)}
+              disabled={
+                processingKey === 'toggle-dining' ||
+                Boolean(student.comedorBajaSolicitada)
+              }
+            >
+              <Text style={styles.withdrawBtnText}>{buttonText}</Text>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              style={styles.enrollBtn}
+              onPress={() => onToggleDining(true)}
+              disabled={processingKey === 'toggle-dining'}
+            >
+              <Ionicons
+                name="checkmark-circle-outline"
+                size={16}
+                color={COLORS.white}
+              />
+              <Text style={styles.enrollBtnText}>
+                Inscribir al Servicio de Comedor Escolar
+              </Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
+    </View>
+  );
+};
+
 const ServicesScreen = ({
   student,
   allStudents = [],
@@ -246,7 +711,7 @@ const ServicesScreen = ({
               activeServiceTab === 'sports' && styles.subTabTextActive,
             ]}
           >
-            Deportes ({enrolledDisciplines.length}/2)
+            Deportes
           </Text>
         </TouchableOpacity>
 
@@ -268,7 +733,7 @@ const ServicesScreen = ({
               activeServiceTab === 'transport' && styles.subTabTextActive,
             ]}
           >
-            Transporte (4 Rec.)
+            Transporte
           </Text>
         </TouchableOpacity>
 
@@ -290,7 +755,7 @@ const ServicesScreen = ({
               activeServiceTab === 'dining' && styles.subTabTextActive,
             ]}
           >
-            Comedor Escolar
+            Comedor
           </Text>
         </TouchableOpacity>
       </View>
@@ -310,181 +775,27 @@ const ServicesScreen = ({
             <View style={styles.sectionHeaderCard}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.sectionTitle}>
-                  Deportes Extracurriculares (8 Disciplinas Oficiales)
+                  Deportes Extracurriculares
                 </Text>
                 <Text style={styles.sectionSub}>
                   Cada alumno puede inscribirse hasta en 2 deportes simultáneamente sin superposición horaria. Precios diferenciados por disciplina.
                 </Text>
               </View>
-              <View style={styles.counterBadge}>
-                <Text style={styles.counterBadgeText}>
-                  {enrolledDisciplines.length} / 2 Activos
-                </Text>
-              </View>
             </View>
 
-            {allDisciplines.map((disc) => {
-              const isEnrolled = isStudentEnrolledInDiscipline(student, disc);
-              const subInfo = student.deportesSuscripciones?.[disc.id] || {};
-              const startDate = subInfo.fechaInicio || student.deporteFechaInicio;
-              const canCancelNow = canCancelServiceToday(startDate);
-              const isScheduledCancel = Boolean(subInfo.bajaSolicitada);
-
-              const monthlyRate = getSportMonthlyPrice(disc, tariffsConfig);
-              const propInfo = calculateMonthlyProportional({
-                startDate: isEnrolled ? startDate : new Date(),
-                monthlyRate,
-              });
-
-              const conflict = !isEnrolled
-                ? checkScheduleConflict(enrolledDisciplines, disc)
-                : null;
-              const cupoMax = Number(disc.cupoMax) || 25;
-              const cupoOcupado = Number(disc.cupoOcupado) || (disc.inscriptos?.length || 0);
-              const isFull = cupoOcupado >= cupoMax && !isEnrolled;
-              const reachedMaxSports = enrolledDisciplines.length >= 2 && !isEnrolled;
-              const isBusy = processingKey === `sport-${disc.id}`;
-
-              return (
-                <View
-                  key={disc.id}
-                  style={[
-                    styles.serviceCard,
-                    isEnrolled && styles.serviceCardEnrolled,
-                  ]}
-                >
-                  <View style={styles.sportTopRow}>
-                    <View style={styles.emojiBox}>
-                      <Text style={{ fontSize: 20 }}>{disc.emoji || '🏅'}</Text>
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <View style={styles.titleWithBadge}>
-                        <Text style={styles.sportName}>{disc.nombre}</Text>
-                        {isEnrolled && (
-                          <View style={styles.activePill}>
-                            <Text style={styles.activePillText}>INSCRIPTO</Text>
-                          </View>
-                        )}
-                      </View>
-                      <Text style={styles.sportTeacher}>
-                        Profesor responsable: {disc.profesor?.nombre || 'Docente asignado'}
-                      </Text>
-                      <Text style={styles.sportSchedule}>
-                        🕒 {disc.horario} · 📍 {disc.lugar}
-                      </Text>
-                    </View>
-                    <View style={{ alignItems: 'flex-end' }}>
-                      <Text style={styles.priceTag}>{formatCurrencyARS(monthlyRate)}/mes</Text>
-                      <Text style={styles.propSmallTag}>
-                        1º mes prop.: {propInfo.formattedProportional}
-                      </Text>
-                    </View>
-                  </View>
-
-                  <View style={styles.metaStrip}>
-                    <Text style={styles.metaStripText}>
-                      Nivel: {disc.niveles || 'Todos'}
-                    </Text>
-                    <Text style={styles.metaStripText}>
-                      Vacantes: {cupoOcupado}/{cupoMax} ocupadas
-                    </Text>
-                  </View>
-
-                  {conflict && !isEnrolled && (
-                    <View style={styles.conflictBox}>
-                      <Ionicons name="warning" size={15} color={COLORS.rose} />
-                      <Text style={styles.conflictText}>
-                        Conflicto de horario: {conflict.overlapLabel}
-                      </Text>
-                    </View>
-                  )}
-
-                  {isEnrolled && (
-                    <View style={styles.subscriptionStatusBox}>
-                      <Text style={styles.subscriptionStatusText}>
-                        Fecha de alta: {formatDateDisplay(startDate)} ·{' '}
-                        {isScheduledCancel
-                          ? `Baja programada para el ${formatDateDisplay(
-                              subInfo.bajaProgramada
-                            )}`
-                          : canCancelNow
-                            ? 'Baja inmediata disponible hoy (mismo día de alta)'
-                            : 'Baja diferida al 1º del próximo mes'}
-                      </Text>
-                    </View>
-                  )}
-
-                  {!isStudentRole && (
-                    <View style={styles.cardActionRow}>
-                      {isEnrolled ? (
-                        <TouchableOpacity
-                          style={[
-                            styles.withdrawBtn,
-                            isScheduledCancel && { opacity: 0.55 },
-                          ]}
-                          onPress={() => handleWithdrawSportAction(disc)}
-                          disabled={isBusy || isScheduledCancel}
-                        >
-                          {isBusy ? (
-                            <ActivityIndicator size="small" color={COLORS.rose} />
-                          ) : (
-                            <>
-                              <Ionicons
-                                name="close-circle-outline"
-                                size={16}
-                                color={COLORS.rose}
-                              />
-                              <Text style={styles.withdrawBtnText}>
-                                {isScheduledCancel
-                                  ? `Baja ya solicitada (${formatDateDisplay(
-                                      subInfo.bajaProgramada
-                                    )})`
-                                  : canCancelNow
-                                    ? 'Cancelar Inscripción Hoy (Inmediata)'
-                                    : 'Solicitar Baja para el Próximo Mes'}
-                              </Text>
-                            </>
-                          )}
-                        </TouchableOpacity>
-                      ) : (
-                        <TouchableOpacity
-                          style={[
-                            styles.enrollBtn,
-                            (Boolean(conflict) || isFull || reachedMaxSports) &&
-                              styles.enrollBtnDisabled,
-                          ]}
-                          onPress={() => handleEnrollSportAction(disc)}
-                          disabled={
-                            isBusy || Boolean(conflict) || isFull || reachedMaxSports
-                          }
-                        >
-                          {isBusy ? (
-                            <ActivityIndicator size="small" color={COLORS.white} />
-                          ) : (
-                            <>
-                              <Ionicons
-                                name="add-circle-outline"
-                                size={16}
-                                color={COLORS.white}
-                              />
-                              <Text style={styles.enrollBtnText}>
-                                {isFull
-                                  ? 'Cupo Completo'
-                                  : conflict
-                                    ? 'Bloqueado por Superposición Horaria'
-                                    : reachedMaxSports
-                                      ? 'Máximo 2 Deportes Alcanzado'
-                                      : `Inscribir en ${disc.nombre}`}
-                              </Text>
-                            </>
-                          )}
-                        </TouchableOpacity>
-                      )}
-                    </View>
-                  )}
-                </View>
-              );
-            })}
+            {allDisciplines.map((disc) => (
+              <SportCardItem
+                key={disc.id}
+                disc={disc}
+                student={student}
+                enrolledDisciplines={enrolledDisciplines}
+                tariffsConfig={tariffsConfig}
+                isStudentRole={isStudentRole}
+                isBusy={processingKey === `sport-${disc.id}`}
+                onEnroll={handleEnrollSportAction}
+                onWithdraw={handleWithdrawSportAction}
+              />
+            ))}
           </View>
         )}
 
@@ -515,7 +826,7 @@ const ServicesScreen = ({
                   </Text>
                   {student.transporteBajaSolicitada && (
                     <Text style={styles.scheduledCancelWarning}>
-                      ⏳ Baja programada solicitada para el{' '}
+                      Baja programada solicitada para el{' '}
                       {formatDateDisplay(student.transporteBajaProgramada)}.
                     </Text>
                   )}
@@ -537,241 +848,37 @@ const ServicesScreen = ({
               </View>
             )}
 
-            {routes.map((route) => {
-              const occupancy = getTransportRouteOccupancy(
-                route.id,
-                allStudents,
-                routes,
-                SPRINTER_STANDARD_CAPACITY
-              );
-              const isCurrentRoute =
-                studentRoute &&
-                (studentRoute.id === route.id || studentRoute.code === route.code);
-              const monthlyPrice = getRouteMonthlyPrice(route.id, tariffsConfig);
-              const prop = calculateMonthlyProportional({
-                startDate: isCurrentRoute ? student.transporteFechaInicio : new Date(),
-                monthlyRate: monthlyPrice,
-              });
-              const isBusy = processingKey === `route-${route.id}`;
-
-              return (
-                <View
-                  key={route.id}
-                  style={[
-                    styles.serviceCard,
-                    isCurrentRoute && styles.serviceCardEnrolled,
-                  ]}
-                >
-                  <View style={styles.sportTopRow}>
-                    <View style={[styles.emojiBox, { backgroundColor: COLORS.cyanSoft }]}>
-                      <Ionicons name="bus" size={20} color={COLORS.cyan} />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.sportName}>{route.nombre}</Text>
-                      <Text style={styles.sportTeacher}>Zona: {route.zona}</Text>
-                      <Text style={styles.sportSchedule}>
-                        Ida: {route.horarioIda} · Regreso: {route.horarioRegreso}
-                      </Text>
-                    </View>
-                    <View style={{ alignItems: 'flex-end' }}>
-                      <Text style={styles.priceTag}>
-                        {formatCurrencyARS(monthlyPrice)}/mes
-                      </Text>
-                      <Text style={styles.propSmallTag}>
-                        Prop. hoy: {prop.formattedProportional}
-                      </Text>
-                    </View>
-                  </View>
-
-                  <View style={styles.occupancyBarWrap}>
-                    <View style={styles.occupancyLabels}>
-                      <Text style={styles.occupancyText}>
-                        Mercedes-Benz Sprinter: {occupancy.ocupados}/{occupancy.capacidad} plazas ocupadas
-                      </Text>
-                      <Text
-                        style={[
-                          styles.occupancyFreeText,
-                          { color: occupancy.estaLleno ? COLORS.rose : COLORS.emerald },
-                        ]}
-                      >
-                        {occupancy.estaLleno
-                          ? 'SIN VACANTES (15/15)'
-                          : `${occupancy.disponibles} plazas libres`}
-                      </Text>
-                    </View>
-                    <View style={styles.progressTrack}>
-                      <View
-                        style={[
-                          styles.progressFill,
-                          {
-                            width: `${occupancy.porcentaje}%`,
-                            backgroundColor: occupancy.estaLleno
-                              ? COLORS.rose
-                              : COLORS.emerald,
-                          },
-                        ]}
-                      />
-                    </View>
-                  </View>
-
-                  {!isStudentRole && (
-                    <TouchableOpacity
-                      style={[
-                        styles.enrollBtn,
-                        (isCurrentRoute || occupancy.estaLleno) &&
-                          styles.enrollBtnDisabled,
-                      ]}
-                      onPress={() => handleEnrollRouteAction(route)}
-                      disabled={isBusy || isCurrentRoute || occupancy.estaLleno}
-                    >
-                      {isBusy ? (
-                        <ActivityIndicator size="small" color={COLORS.white} />
-                      ) : (
-                        <Text style={styles.enrollBtnText}>
-                          {isCurrentRoute
-                            ? '✓ Recorrido Actualmente Activo'
-                            : occupancy.estaLleno
-                              ? 'Unidad Sprinter Completa (15/15)'
-                              : `Seleccionar ${route.id}`}
-                        </Text>
-                      )}
-                    </TouchableOpacity>
-                  )}
-                </View>
-              );
-            })}
+            {routes.map((route) => (
+              <TransportRouteCardItem
+                key={route.id}
+                route={route}
+                student={student}
+                studentRoute={studentRoute}
+                allStudents={allStudents}
+                routes={routes}
+                tariffsConfig={tariffsConfig}
+                isStudentRole={isStudentRole}
+                isBusy={processingKey === `route-${route.id}`}
+                onEnrollRoute={handleEnrollRouteAction}
+              />
+            ))}
           </View>
         )}
 
         {/* TAB 3: COMEDOR ESCOLAR */}
         {activeServiceTab === 'dining' && (
           <View style={styles.sectionWrap}>
-            <View
-              style={[
-                styles.serviceCard,
-                isDiningActive && styles.serviceCardEnrolled,
-              ]}
-            >
-              <View style={styles.sportTopRow}>
-                <View style={[styles.emojiBox, { backgroundColor: COLORS.accentSoft }]}>
-                  <Ionicons name="restaurant" size={20} color={COLORS.accent} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <View style={styles.titleWithBadge}>
-                    <Text style={styles.sportName}>
-                      Servicio de Comedor Escolar Mensual
-                    </Text>
-                    {isDiningActive && (
-                      <View style={styles.activePill}>
-                        <Text style={styles.activePillText}>ACTIVO</Text>
-                      </View>
-                    )}
-                  </View>
-                  <Text style={styles.sportTeacher}>
-                    Almuerzo nutricional supervisado para jornada extendida
-                  </Text>
-                </View>
-                <View style={{ alignItems: 'flex-end' }}>
-                  <Text style={styles.priceTag}>
-                    {formatCurrencyARS(diningPrice)}/mes
-                  </Text>
-                  <Text style={styles.propSmallTag}>
-                    Prop. mes:{' '}
-                    {
-                      calculateMonthlyProportional({
-                        startDate: isDiningActive
-                          ? student.comedorFechaInicio
-                          : new Date(),
-                        monthlyRate: diningPrice,
-                      }).formattedProportional
-                    }
-                  </Text>
-                </View>
-              </View>
-
-              {isDiningActive && (
-                <View style={styles.subscriptionStatusBox}>
-                  <Text style={styles.subscriptionStatusText}>
-                    Fecha de alta: {formatDateDisplay(student.comedorFechaInicio)} ·{' '}
-                    {student.comedorBajaSolicitada
-                      ? `Baja programada para el ${formatDateDisplay(
-                          student.comedorBajaProgramada
-                        )}`
-                      : canCancelServiceToday(student.comedorFechaInicio)
-                        ? 'Cancelación inmediata disponible hoy'
-                        : 'Baja diferida al 1º del próximo mes'}
-                  </Text>
-                </View>
-              )}
-
-              <View style={{ gap: 6, marginTop: 4 }}>
-                <Text style={styles.smallInputLabel}>
-                  Observaciones Nutricionales / Restricciones Alimentarias (Celiaquía, Alergias, etc.)
-                </Text>
-                <TextInput
-                  style={styles.notesInput}
-                  value={diningNotes}
-                  onChangeText={setDiningNotes}
-                  editable={!isStudentRole}
-                  placeholder="Ej: Sin restricciones alimentarias / Menú apto celíaco"
-                />
-                {!isStudentRole && (
-                  <TouchableOpacity
-                    style={styles.saveNotesBtn}
-                    onPress={handleSaveDiningNotes}
-                    disabled={processingKey === 'save-dining-notes'}
-                  >
-                    <Ionicons name="save-outline" size={14} color={COLORS.indigo} />
-                    <Text style={styles.saveNotesBtnText}>
-                      Guardar Observaciones de Comedor
-                    </Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-
-              {!isStudentRole && (
-                <View style={styles.cardActionRow}>
-                  {isDiningActive ? (
-                    <TouchableOpacity
-                      style={[
-                        styles.withdrawBtn,
-                        student.comedorBajaSolicitada && { opacity: 0.55 },
-                      ]}
-                      onPress={() => handleToggleDiningAction(false)}
-                      disabled={
-                        processingKey === 'toggle-dining' ||
-                        Boolean(student.comedorBajaSolicitada)
-                      }
-                    >
-                      <Text style={styles.withdrawBtnText}>
-                        {student.comedorBajaSolicitada
-                          ? `Baja Programada (${formatDateDisplay(
-                              student.comedorBajaProgramada
-                            )})`
-                          : canCancelServiceToday(student.comedorFechaInicio)
-                            ? 'Cancelar Comedor Hoy (Baja Inmediata)'
-                            : 'Solicitar Baja para el Próximo Mes'}
-                      </Text>
-                    </TouchableOpacity>
-                  ) : (
-                    <TouchableOpacity
-                      style={styles.enrollBtn}
-                      onPress={() => handleToggleDiningAction(true)}
-                      disabled={processingKey === 'toggle-dining'}
-                    >
-                      <Ionicons
-                        name="checkmark-circle-outline"
-                        size={16}
-                        color={COLORS.white}
-                      />
-                      <Text style={styles.enrollBtnText}>
-                        Inscribir al Servicio de Comedor Escolar
-                      </Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-              )}
-            </View>
+            <DiningCardItem
+              student={student}
+              isDiningActive={isDiningActive}
+              diningPrice={diningPrice}
+              diningNotes={diningNotes}
+              setDiningNotes={setDiningNotes}
+              isStudentRole={isStudentRole}
+              processingKey={processingKey}
+              onSaveNotes={handleSaveDiningNotes}
+              onToggleDining={handleToggleDiningAction}
+            />
           </View>
         )}
       </ScrollView>
@@ -873,19 +980,6 @@ const styles = StyleSheet.create({
     color: COLORS.textSecondary,
     marginTop: 2,
     lineHeight: 15,
-  },
-  counterBadge: {
-    backgroundColor: COLORS.emeraldSoft,
-    borderWidth: 1,
-    borderColor: COLORS.emeraldBorder,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 20,
-  },
-  counterBadgeText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: COLORS.emerald,
   },
   serviceCard: {
     backgroundColor: COLORS.surface,

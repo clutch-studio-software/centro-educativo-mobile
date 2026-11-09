@@ -1,14 +1,12 @@
 import React, { useState } from 'react';
 import {
-  SafeAreaView,
   View,
   Text,
   TouchableOpacity,
   ActivityIndicator,
-  StatusBar as RNStatusBar,
-  Platform,
   StyleSheet,
 } from 'react-native';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from './src/theme/colors';
@@ -58,6 +56,136 @@ const MobilePortalShell = () => {
 
   // Si el usuario logueado es Estudiante, su vista principal es su Ficha Académica y Servicios
   const effectiveTab = isStudentRole && activeBottomTab === 'billing' ? 'academic' : activeBottomTab;
+
+  const renderMainContent = () => {
+    if (portalLoading) {
+      return (
+        <View style={styles.centeredContent}>
+          <ActivityIndicator size="large" color={COLORS.accent} />
+        </View>
+      );
+    }
+
+    if (linkedStudents.length === 0) {
+      return (
+        <View style={styles.centeredContent}>
+          <Ionicons name="people-circle-outline" size={52} color={COLORS.textMuted} />
+          <Text style={styles.noStudentsTitle}>
+            No se encontraron alumnos vinculados a su cuenta
+          </Text>
+          <Text style={styles.noStudentsSub}>
+            Por normativa de privacidad institucional, cada padre/tutor solo puede consultar y gestionar la información de sus hijos registrados en Firestore (`studentIds` / `parentId`).
+          </Text>
+        </View>
+      );
+    }
+
+    return (
+      <View style={styles.mainBody}>
+        {effectiveTab === 'billing' && isParentRole && (
+          <BillingScreen
+            user={user}
+            linkedStudents={linkedStudents}
+            selectedStudentId={selectedStudentId}
+            tariffsConfig={tariffsConfig}
+            allDisciplines={allDisciplines}
+            financeReceipts={financeReceipts}
+            onStudentUpdated={updateStudentInState}
+            onFeedback={setFeedbackBanner}
+          />
+        )}
+
+        {effectiveTab === 'services' && (
+          <ServicesScreen
+            student={currentStudent}
+            allStudents={linkedStudents}
+            allDisciplines={allDisciplines}
+            routes={routes}
+            tariffsConfig={tariffsConfig}
+            isStudentRole={isStudentRole}
+            onStudentUpdated={updateStudentInState}
+            onFeedback={setFeedbackBanner}
+          />
+        )}
+
+        {effectiveTab === 'academic' && (
+          <AcademicProfileScreen
+            user={user}
+            student={currentStudent}
+            subjects={currentStudentSubjects}
+            allDisciplines={allDisciplines}
+            routes={routes}
+            isStudentRole={isStudentRole}
+            onStudentUpdated={updateStudentInState}
+            onFeedback={setFeedbackBanner}
+          />
+        )}
+      </View>
+    );
+  };
+
+  const renderBottomNav = () => (
+    <View style={styles.bottomNav}>
+      {isParentRole && (
+        <TouchableOpacity
+          style={styles.navItem}
+          onPress={() => setActiveBottomTab('billing')}
+        >
+          <Ionicons
+            name={effectiveTab === 'billing' ? 'wallet' : 'wallet-outline'}
+            size={21}
+            color={effectiveTab === 'billing' ? COLORS.accent : COLORS.textMuted}
+          />
+          <Text
+            style={[
+              styles.navLabel,
+              effectiveTab === 'billing' && styles.navLabelActive,
+            ]}
+          >
+            Cuotas y Pagos
+          </Text>
+        </TouchableOpacity>
+      )}
+
+      <TouchableOpacity
+        style={styles.navItem}
+        onPress={() => setActiveBottomTab('services')}
+      >
+        <Ionicons
+          name={effectiveTab === 'services' ? 'grid' : 'grid-outline'}
+          size={21}
+          color={effectiveTab === 'services' ? COLORS.accent : COLORS.textMuted}
+        />
+        <Text
+          style={[
+            styles.navLabel,
+            effectiveTab === 'services' && styles.navLabelActive,
+          ]}
+        >
+          Servicios y Deportes
+        </Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={styles.navItem}
+        onPress={() => setActiveBottomTab('academic')}
+      >
+        <Ionicons
+          name={effectiveTab === 'academic' ? 'school' : 'school-outline'}
+          size={21}
+          color={effectiveTab === 'academic' ? COLORS.accent : COLORS.textMuted}
+        />
+        <Text
+          style={[
+            styles.navLabel,
+            effectiveTab === 'academic' && styles.navLabelActive,
+          ]}
+        >
+          Legajo y Materias
+        </Text>
+      </TouchableOpacity>
+    </View>
+  );
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -139,127 +267,10 @@ const MobilePortalShell = () => {
       )}
 
       {/* Contenido Principal */}
-      {portalLoading ? (
-        <View style={styles.centeredContent}>
-          <ActivityIndicator size="large" color={COLORS.accent} />
-          <Text style={styles.loadingSubText}>
-            Sincronizando legajos, aranceles y servicios desde Cloud Firestore...
-          </Text>
-        </View>
-      ) : linkedStudents.length === 0 ? (
-        <View style={styles.centeredContent}>
-          <Ionicons name="people-circle-outline" size={52} color={COLORS.textMuted} />
-          <Text style={styles.noStudentsTitle}>
-            No se encontraron alumnos vinculados a su cuenta
-          </Text>
-          <Text style={styles.noStudentsSub}>
-            Por normativa de privacidad institucional, cada padre/tutor solo puede consultar y gestionar la información de sus hijos registrados en Firestore (`studentIds` / `parentId`).
-          </Text>
-        </View>
-      ) : (
-        <View style={styles.mainBody}>
-          {effectiveTab === 'billing' && isParentRole && (
-            <BillingScreen
-              user={user}
-              linkedStudents={linkedStudents}
-              selectedStudentId={selectedStudentId}
-              tariffsConfig={tariffsConfig}
-              allDisciplines={allDisciplines}
-              financeReceipts={financeReceipts}
-              onStudentUpdated={updateStudentInState}
-              onFeedback={setFeedbackBanner}
-            />
-          )}
-
-          {effectiveTab === 'services' && (
-            <ServicesScreen
-              student={currentStudent}
-              allStudents={linkedStudents}
-              allDisciplines={allDisciplines}
-              routes={routes}
-              tariffsConfig={tariffsConfig}
-              isStudentRole={isStudentRole}
-              onStudentUpdated={updateStudentInState}
-              onFeedback={setFeedbackBanner}
-            />
-          )}
-
-          {effectiveTab === 'academic' && (
-            <AcademicProfileScreen
-              user={user}
-              student={currentStudent}
-              subjects={currentStudentSubjects}
-              allDisciplines={allDisciplines}
-              routes={routes}
-              isStudentRole={isStudentRole}
-              onStudentUpdated={updateStudentInState}
-              onFeedback={setFeedbackBanner}
-            />
-          )}
-        </View>
-      )}
+      {renderMainContent()}
 
       {/* Barra de Navegación Inferior según Rol */}
-      <View style={styles.bottomNav}>
-        {isParentRole && (
-          <TouchableOpacity
-            style={styles.navItem}
-            onPress={() => setActiveBottomTab('billing')}
-          >
-            <Ionicons
-              name={effectiveTab === 'billing' ? 'wallet' : 'wallet-outline'}
-              size={21}
-              color={effectiveTab === 'billing' ? COLORS.accent : COLORS.textMuted}
-            />
-            <Text
-              style={[
-                styles.navLabel,
-                effectiveTab === 'billing' && styles.navLabelActive,
-              ]}
-            >
-              Cuotas y Pagos
-            </Text>
-          </TouchableOpacity>
-        )}
-
-        <TouchableOpacity
-          style={styles.navItem}
-          onPress={() => setActiveBottomTab('services')}
-        >
-          <Ionicons
-            name={effectiveTab === 'services' ? 'grid' : 'grid-outline'}
-            size={21}
-            color={effectiveTab === 'services' ? COLORS.accent : COLORS.textMuted}
-          />
-          <Text
-            style={[
-              styles.navLabel,
-              effectiveTab === 'services' && styles.navLabelActive,
-            ]}
-          >
-            Inscripciones
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.navItem}
-          onPress={() => setActiveBottomTab('academic')}
-        >
-          <Ionicons
-            name={effectiveTab === 'academic' ? 'school' : 'school-outline'}
-            size={21}
-            color={effectiveTab === 'academic' ? COLORS.accent : COLORS.textMuted}
-          />
-          <Text
-            style={[
-              styles.navLabel,
-              effectiveTab === 'academic' && styles.navLabelActive,
-            ]}
-          >
-            Legajo y Materias
-          </Text>
-        </TouchableOpacity>
-      </View>
+      {renderBottomNav()}
 
       {/* Modal de Cambio de Contraseña (Obligatorio si mustChangePassword === true o voluntario) */}
       <ChangePasswordModal
@@ -274,9 +285,11 @@ const MobilePortalShell = () => {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <MobilePortalShell />
-    </AuthProvider>
+    <SafeAreaProvider>
+      <AuthProvider>
+        <MobilePortalShell />
+      </AuthProvider>
+    </SafeAreaProvider>
   );
 }
 
@@ -284,7 +297,6 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: COLORS.primary,
-    paddingTop: Platform.OS === 'android' ? RNStatusBar.currentHeight || 0 : 0,
   },
   centeredScreen: {
     flex: 1,
