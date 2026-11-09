@@ -20,6 +20,282 @@ import {
 import { pickAllowedDocument, formatFileSize } from '../services/storageMobileService';
 import { matchTransportRoute, formatDateDisplay } from '../utils/subscriptionRules';
 
+const resolveAttendanceHistorial = (raw) => {
+  if (Array.isArray(raw?.historial)) return raw.historial;
+  if (Array.isArray(raw?.detalle)) return raw.detalle;
+  return [];
+};
+
+const resolveAttendancePorcentaje = (raw) => {
+  if (typeof raw?.porcentajeAsistencia === 'number') return raw.porcentajeAsistencia;
+  if (typeof raw?.porcentaje === 'number') return raw.porcentaje;
+  return 100;
+};
+
+const VistoAction = ({ isStudent, isVisto, onAcknowledge }) => {
+  if (isVisto) {
+    return <Text style={styles.vistoConfirmed}>✓ Notificación vista por el tutor</Text>;
+  }
+  if (!isStudent) {
+    return (
+      <TouchableOpacity style={[styles.vistoBtn, { marginTop: 6 }]} onPress={onAcknowledge}>
+        <Ionicons name="checkmark-circle-outline" size={14} color={COLORS.emerald} />
+        <Text style={styles.vistoBtnText}>Confirmar Visto del Tutor</Text>
+      </TouchableOpacity>
+    );
+  }
+  return null;
+};
+
+const AcademicTab = ({ subjects, studentSports }) => (
+  <View style={styles.sectionWrap}>
+    <View style={styles.cardBlock}>
+      <View style={styles.blockHeader}>
+        <Ionicons name="library-outline" size={17} color={COLORS.indigo} />
+        <Text style={styles.blockTitle}>
+          Materias que Cursa y Profesores a Cargo ({subjects.length})
+        </Text>
+      </View>
+
+      {subjects.map((sub) => (
+        <View key={sub.id || sub.nombre} style={styles.subjectRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.subjectName}>{sub.nombre}</Text>
+            <Text style={styles.subjectTeacher}>
+              {sub.profesor?.nombre || 'Docente Titular'}
+            </Text>
+          </View>
+          <View style={styles.hoursBadge}>
+            <Text style={styles.hoursBadgeText}>
+              {sub.cargaHoraria || '4 hs/sem'}
+            </Text>
+          </View>
+        </View>
+      ))}
+    </View>
+
+    <View style={styles.cardBlock}>
+      <View style={styles.blockHeader}>
+        <Ionicons name="trophy-outline" size={17} color={COLORS.emerald} />
+        <Text style={styles.blockTitle}>
+          Deportes Extracurriculares en que Participa ({studentSports.length})
+        </Text>
+      </View>
+
+      {studentSports.length === 0 ? (
+        <Text style={styles.emptyNote}>
+          El alumno no registra deportes extracurriculares activos en este momento.
+        </Text>
+      ) : (
+        studentSports.map((sp) => (
+          <View key={sp.id} style={styles.subjectRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.subjectName}>
+                {sp.emoji || '🏅'} {sp.nombre}
+              </Text>
+              <Text style={styles.subjectTeacher}>
+                Horario: {sp.horario} · Profesor: {sp.profesor?.nombre || 'Docente'}
+              </Text>
+            </View>
+          </View>
+        ))
+      )}
+    </View>
+  </View>
+);
+
+const AttendanceTab = ({
+  attendanceSummary,
+  isStudentRole,
+  processingId,
+  onAcknowledge,
+  onJustify,
+}) => (
+  <View style={styles.sectionWrap}>
+    <View style={styles.attendanceStatsGrid}>
+      <View style={styles.statBox}>
+        <Text style={[styles.statVal, { color: COLORS.emerald }]}>
+          {attendanceSummary.porcentaje}%
+        </Text>
+        <Text style={styles.statLbl}>Asistencia</Text>
+      </View>
+      <View style={styles.statBox}>
+        <Text style={[styles.statVal, { color: COLORS.primary }]}>
+          {attendanceSummary.presentes}
+        </Text>
+        <Text style={styles.statLbl}>Presentes</Text>
+      </View>
+      <View style={styles.statBox}>
+        <Text style={[styles.statVal, { color: COLORS.rose }]}>
+          {attendanceSummary.faltasInjustificadas}
+        </Text>
+        <Text style={styles.statLbl}>Injustif.</Text>
+      </View>
+      <View style={styles.statBox}>
+        <Text style={[styles.statVal, { color: COLORS.amber }]}>
+          {attendanceSummary.faltasJustificadas}
+        </Text>
+        <Text style={styles.statLbl}>Justif.</Text>
+      </View>
+    </View>
+
+    {attendanceSummary.historial.length === 0 ? (
+      <View style={styles.cardBlock}>
+        <Text style={styles.emptyNote}>
+          No se registran inasistencias ni tardanzas en el legajo del alumno.
+        </Text>
+      </View>
+    ) : (
+      attendanceSummary.historial.map((att) => {
+        const recordId = att.id || att.fecha;
+        const isUnjustified =
+          !att.justificada &&
+          (att.estado === 'injustificada' ||
+            String(att.tipo || '').toLowerCase().includes('injustificada'));
+
+        return (
+          <View key={recordId} style={styles.recordCard}>
+            <View style={styles.recordTopRow}>
+              <Text style={styles.recordTitle}>
+                {att.tipo || 'Inasistencia'} — {formatDateDisplay(att.fecha)}
+              </Text>
+              <Text
+                style={[
+                  styles.recordStatusTag,
+                  { color: isUnjustified ? COLORS.rose : COLORS.amber },
+                ]}
+              >
+                {att.justificada ? 'En revisión / Justificada' : 'Injustificada'}
+              </Text>
+            </View>
+            <Text style={styles.recordBodyText}>
+              Motivo: {att.motivo || 'Ausencia registrada en curso'}
+            </Text>
+
+            {att.justificacion?.comprobanteUrl ? (
+              <TouchableOpacity
+                style={styles.certLinkBtn}
+                onPress={() => Linking.openURL(att.justificacion.comprobanteUrl)}
+              >
+                <Ionicons name="document-text-outline" size={14} color={COLORS.indigo} />
+                <Text style={styles.certLinkText}>
+                  Ver certificado médico adjunto ({att.justificacion.comprobanteNombre})
+                </Text>
+              </TouchableOpacity>
+            ) : null}
+
+            {!isStudentRole && (
+              <View style={styles.recordActionsRow}>
+                {!att.vistoPorTutor ? (
+                  <TouchableOpacity
+                    style={styles.vistoBtn}
+                    onPress={() => onAcknowledge('attendance', recordId)}
+                    disabled={processingId === `attendance-${recordId}`}
+                  >
+                    <Ionicons name="eye-outline" size={14} color={COLORS.emerald} />
+                    <Text style={styles.vistoBtnText}>Dar Visto del Tutor</Text>
+                  </TouchableOpacity>
+                ) : (
+                  <Text style={styles.vistoConfirmed}>
+                    ✓ Visto por tutor ({formatDateDisplay(att.fechaVisto)})
+                  </Text>
+                )}
+
+                {isUnjustified && (
+                  <TouchableOpacity
+                    style={styles.justifyBtn}
+                    onPress={() => onJustify(att)}
+                  >
+                    <Ionicons name="cloud-upload-outline" size={14} color={COLORS.accent} />
+                    <Text style={styles.justifyBtnText}>Justificar Inasistencia</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
+          </View>
+        );
+      })
+    )}
+  </View>
+);
+
+const SupervisionTab = ({
+  healthEntries,
+  preceptoriaEntries,
+  isStudentRole,
+  onAcknowledge,
+}) => (
+  <View style={styles.sectionWrap}>
+    <View style={styles.cardBlock}>
+      <View style={styles.blockHeader}>
+        <Ionicons name="medkit" size={17} color={COLORS.rose} />
+        <Text style={styles.blockTitle}>
+          Gabinete de Enfermería ({healthEntries.length})
+        </Text>
+      </View>
+
+      {healthEntries.length === 0 ? (
+        <Text style={styles.emptyNote}>
+          El alumno no registra atenciones en el Gabinete de Enfermería.
+        </Text>
+      ) : (
+        healthEntries.map((enf) => {
+          const eid = enf.id || enf.fecha;
+          return (
+            <View key={eid} style={styles.recordCardInner}>
+              <Text style={styles.recordTitle}>
+                {enf.sintoma || enf.motivo || 'Atención de Enfermería'} ({enf.fecha})
+              </Text>
+              <Text style={styles.recordBodyText}>
+                Atención: {enf.atencion || enf.observaciones || 'Control en gabinete'}
+              </Text>
+              <VistoAction
+                isStudent={isStudentRole}
+                isVisto={Boolean(enf.vistoPorTutor)}
+                onAcknowledge={() => onAcknowledge('health', eid)}
+              />
+            </View>
+          );
+        })
+      )}
+    </View>
+
+    <View style={styles.cardBlock}>
+      <View style={styles.blockHeader}>
+        <Ionicons name="shield-checkmark" size={17} color={COLORS.amber} />
+        <Text style={styles.blockTitle}>
+          Seguimiento de Preceptoría ({preceptoriaEntries.length})
+        </Text>
+      </View>
+
+      {preceptoriaEntries.length === 0 ? (
+        <Text style={styles.emptyNote}>
+          El alumno no registra actas ni observaciones en Preceptoría.
+        </Text>
+      ) : (
+        preceptoriaEntries.map((prec) => {
+          const pid = prec.id || prec.fecha;
+          return (
+            <View key={pid} style={styles.recordCardInner}>
+              <Text style={styles.recordTitle}>
+                {prec.tipo || prec.titulo || 'Nota de Preceptoría'} ({prec.fecha})
+              </Text>
+              <Text style={styles.recordBodyText}>
+                {prec.motivo || prec.descripcion || ''}
+              </Text>
+              <VistoAction
+                isStudent={isStudentRole}
+                isVisto={Boolean(prec.vistoPorTutor)}
+                onAcknowledge={() => onAcknowledge('preceptoria', pid)}
+              />
+            </View>
+          );
+        })
+      )}
+    </View>
+  </View>
+);
+
 const AcademicProfileScreen = ({
   user,
   student,
@@ -67,21 +343,12 @@ const AcademicProfileScreen = ({
 
   const attendanceSummary = useMemo(() => {
     const raw = student?.asistencias || {};
-    const historial = Array.isArray(raw.historial)
-      ? raw.historial
-      : Array.isArray(raw.detalle)
-        ? raw.detalle
-        : [];
+    const historial = resolveAttendanceHistorial(raw);
     const presentes = Number(raw.presentes) || 0;
     const faltasInjustificadas = Number(raw.faltasInjustificadas) || 0;
     const faltasJustificadas = Number(raw.faltasJustificadas) || 0;
     const tardanzas = Number(raw.tardanzas) || 0;
-    const porcentaje =
-      typeof raw.porcentajeAsistencia === 'number'
-        ? raw.porcentajeAsistencia
-        : typeof raw.porcentaje === 'number'
-          ? raw.porcentaje
-          : 100;
+    const porcentaje = resolveAttendancePorcentaje(raw);
 
     return {
       presentes,
@@ -277,255 +544,28 @@ const AcademicProfileScreen = ({
 
         {/* SUB-TAB 1: PROFESORES POR MATERIA Y DEPORTES EN QUE PARTICIPA */}
         {subTab === 'academic' && (
-          <View style={styles.sectionWrap}>
-            <View style={styles.cardBlock}>
-              <View style={styles.blockHeader}>
-                <Ionicons name="library-outline" size={17} color={COLORS.indigo} />
-                <Text style={styles.blockTitle}>
-                  Materias que Cursa y Profesores a Cargo ({subjects.length})
-                </Text>
-              </View>
-
-              {subjects.map((sub) => (
-                <View key={sub.id || sub.nombre} style={styles.subjectRow}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.subjectName}>{sub.nombre}</Text>
-                    <Text style={styles.subjectTeacher}>
-                      {sub.profesor?.nombre || 'Docente Titular'}
-                    </Text>
-                  </View>
-                  <View style={styles.hoursBadge}>
-                    <Text style={styles.hoursBadgeText}>
-                      {sub.cargaHoraria || '4 hs/sem'}
-                    </Text>
-                  </View>
-                </View>
-              ))}
-            </View>
-
-            <View style={styles.cardBlock}>
-              <View style={styles.blockHeader}>
-                <Ionicons name="trophy-outline" size={17} color={COLORS.emerald} />
-                <Text style={styles.blockTitle}>
-                  Deportes Extracurriculares en que Participa ({studentSports.length})
-                </Text>
-              </View>
-
-              {studentSports.length === 0 ? (
-                <Text style={styles.emptyNote}>
-                  El alumno no registra deportes extracurriculares activos en este momento.
-                </Text>
-              ) : (
-                studentSports.map((sp) => (
-                  <View key={sp.id} style={styles.subjectRow}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.subjectName}>
-                        {sp.emoji || '🏅'} {sp.nombre}
-                      </Text>
-                      <Text style={styles.subjectTeacher}>
-                        Horario: {sp.horario} · Profesor: {sp.profesor?.nombre || 'Docente'}
-                      </Text>
-                    </View>
-                  </View>
-                ))
-              )}
-            </View>
-          </View>
+          <AcademicTab subjects={subjects} studentSports={studentSports} />
         )}
 
         {/* SUB-TAB 2: ASISTENCIAS E INASISTENCIAS */}
         {subTab === 'attendance' && (
-          <View style={styles.sectionWrap}>
-            <View style={styles.attendanceStatsGrid}>
-              <View style={styles.statBox}>
-                <Text style={[styles.statVal, { color: COLORS.emerald }]}>
-                  {attendanceSummary.porcentaje}%
-                </Text>
-                <Text style={styles.statLbl}>Asistencia</Text>
-              </View>
-              <View style={styles.statBox}>
-                <Text style={[styles.statVal, { color: COLORS.primary }]}>
-                  {attendanceSummary.presentes}
-                </Text>
-                <Text style={styles.statLbl}>Presentes</Text>
-              </View>
-              <View style={styles.statBox}>
-                <Text style={[styles.statVal, { color: COLORS.rose }]}>
-                  {attendanceSummary.faltasInjustificadas}
-                </Text>
-                <Text style={styles.statLbl}>Injustif.</Text>
-              </View>
-              <View style={styles.statBox}>
-                <Text style={[styles.statVal, { color: COLORS.amber }]}>
-                  {attendanceSummary.faltasJustificadas}
-                </Text>
-                <Text style={styles.statLbl}>Justif.</Text>
-              </View>
-            </View>
-
-            {attendanceSummary.historial.length === 0 ? (
-              <View style={styles.cardBlock}>
-                <Text style={styles.emptyNote}>
-                  No se registran inasistencias ni tardanzas en el legajo del alumno.
-                </Text>
-              </View>
-            ) : (
-              attendanceSummary.historial.map((att) => {
-                const recordId = att.id || att.fecha;
-                const isUnjustified =
-                  !att.justificada &&
-                  (att.estado === 'injustificada' ||
-                    String(att.tipo || '').toLowerCase().includes('injustificada'));
-
-                return (
-                  <View key={recordId} style={styles.recordCard}>
-                    <View style={styles.recordTopRow}>
-                      <Text style={styles.recordTitle}>
-                        {att.tipo || 'Inasistencia'} — {formatDateDisplay(att.fecha)}
-                      </Text>
-                      <Text
-                        style={[
-                          styles.recordStatusTag,
-                          { color: isUnjustified ? COLORS.rose : COLORS.amber },
-                        ]}
-                      >
-                        {att.justificada ? 'En revisión / Justificada' : 'Injustificada'}
-                      </Text>
-                    </View>
-                    <Text style={styles.recordBodyText}>
-                      Motivo: {att.motivo || 'Ausencia registrada en curso'}
-                    </Text>
-
-                    {att.justificacion?.comprobanteUrl ? (
-                      <TouchableOpacity
-                        style={styles.certLinkBtn}
-                        onPress={() => Linking.openURL(att.justificacion.comprobanteUrl)}
-                      >
-                        <Ionicons name="document-text-outline" size={14} color={COLORS.indigo} />
-                        <Text style={styles.certLinkText}>
-                          Ver certificado médico adjunto ({att.justificacion.comprobanteNombre})
-                        </Text>
-                      </TouchableOpacity>
-                    ) : null}
-
-                    {!isStudentRole && (
-                      <View style={styles.recordActionsRow}>
-                        {!att.vistoPorTutor ? (
-                          <TouchableOpacity
-                            style={styles.vistoBtn}
-                            onPress={() => handleAcknowledge('attendance', recordId)}
-                            disabled={processingId === `attendance-${recordId}`}
-                          >
-                            <Ionicons name="eye-outline" size={14} color={COLORS.emerald} />
-                            <Text style={styles.vistoBtnText}>Dar Visto del Tutor</Text>
-                          </TouchableOpacity>
-                        ) : (
-                          <Text style={styles.vistoConfirmed}>
-                            ✓ Visto por tutor ({formatDateDisplay(att.fechaVisto)})
-                          </Text>
-                        )}
-
-                        {isUnjustified && (
-                          <TouchableOpacity
-                            style={styles.justifyBtn}
-                            onPress={() => setJustifyingAbsence(att)}
-                          >
-                            <Ionicons name="medkit-outline" size={14} color={COLORS.white} />
-                            <Text style={styles.justifyBtnText}>Justificar Falta</Text>
-                          </TouchableOpacity>
-                        )}
-                      </View>
-                    )}
-                  </View>
-                );
-              })
-            )}
-          </View>
+          <AttendanceTab
+            attendanceSummary={attendanceSummary}
+            isStudentRole={isStudentRole}
+            processingId={processingId}
+            onAcknowledge={handleAcknowledge}
+            onJustify={setJustifyingAbsence}
+          />
         )}
 
         {/* SUB-TAB 3: GABINETE DE ENFERMERÍA Y PRECEPTORÍA */}
         {subTab === 'supervision' && (
-          <View style={styles.sectionWrap}>
-            <View style={styles.cardBlock}>
-              <View style={styles.blockHeader}>
-                <Ionicons name="medkit" size={17} color={COLORS.rose} />
-                <Text style={styles.blockTitle}>
-                  Gabinete de Enfermería ({healthEntries.length})
-                </Text>
-              </View>
-
-              {healthEntries.length === 0 ? (
-                <Text style={styles.emptyNote}>
-                  El alumno no registra atenciones en el Gabinete de Enfermería.
-                </Text>
-              ) : (
-                healthEntries.map((enf) => {
-                  const eid = enf.id || enf.fecha;
-                  return (
-                    <View key={eid} style={styles.recordCardInner}>
-                      <Text style={styles.recordTitle}>
-                        {enf.sintoma || enf.motivo || 'Atención de Enfermería'} ({enf.fecha})
-                      </Text>
-                      <Text style={styles.recordBodyText}>
-                        Atención: {enf.atencion || enf.observaciones || 'Control en gabinete'}
-                      </Text>
-                      {!isStudentRole && !enf.vistoPorTutor ? (
-                        <TouchableOpacity
-                          style={[styles.vistoBtn, { marginTop: 6 }]}
-                          onPress={() => handleAcknowledge('health', eid)}
-                        >
-                          <Ionicons name="checkmark-circle-outline" size={14} color={COLORS.emerald} />
-                          <Text style={styles.vistoBtnText}>Confirmar Visto del Tutor</Text>
-                        </TouchableOpacity>
-                      ) : enf.vistoPorTutor ? (
-                        <Text style={styles.vistoConfirmed}>✓ Notificación vista por el tutor</Text>
-                      ) : null}
-                    </View>
-                  );
-                })
-              )}
-            </View>
-
-            <View style={styles.cardBlock}>
-              <View style={styles.blockHeader}>
-                <Ionicons name="shield-checkmark" size={17} color={COLORS.amber} />
-                <Text style={styles.blockTitle}>
-                  Seguimiento de Preceptoría ({preceptoriaEntries.length})
-                </Text>
-              </View>
-
-              {preceptoriaEntries.length === 0 ? (
-                <Text style={styles.emptyNote}>
-                  El alumno no registra actas ni observaciones en Preceptoría.
-                </Text>
-              ) : (
-                preceptoriaEntries.map((prec) => {
-                  const pid = prec.id || prec.fecha;
-                  return (
-                    <View key={pid} style={styles.recordCardInner}>
-                      <Text style={styles.recordTitle}>
-                        {prec.tipo || prec.titulo || 'Nota de Preceptoría'} ({prec.fecha})
-                      </Text>
-                      <Text style={styles.recordBodyText}>
-                        {prec.motivo || prec.descripcion || ''}
-                      </Text>
-                      {!isStudentRole && !prec.vistoPorTutor ? (
-                        <TouchableOpacity
-                          style={[styles.vistoBtn, { marginTop: 6 }]}
-                          onPress={() => handleAcknowledge('preceptoria', pid)}
-                        >
-                          <Ionicons name="checkmark-circle-outline" size={14} color={COLORS.emerald} />
-                          <Text style={styles.vistoBtnText}>Confirmar Visto del Tutor</Text>
-                        </TouchableOpacity>
-                      ) : prec.vistoPorTutor ? (
-                        <Text style={styles.vistoConfirmed}>✓ Notificación vista por el tutor</Text>
-                      ) : null}
-                    </View>
-                  );
-                })
-              )}
-            </View>
-          </View>
+          <SupervisionTab
+            healthEntries={healthEntries}
+            preceptoriaEntries={preceptoriaEntries}
+            isStudentRole={isStudentRole}
+            onAcknowledge={handleAcknowledge}
+          />
         )}
       </ScrollView>
 

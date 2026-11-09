@@ -49,7 +49,146 @@ const DEFAULT_SPORT_PRICES = {
   'disc-8': 13500,
 };
 
-export const BILLING_PERIODS_CATALOG = [
+export const resolveSelectedItems = (bv, matchingReceipt) => {
+  if (Array.isArray(bv?.selectedItems)) return bv.selectedItems;
+  if (Array.isArray(matchingReceipt?.selectedItems)) return matchingReceipt.selectedItems;
+  return [];
+};
+
+const resolvePreviousVouchers = (existingReceipt) => {
+  if (Array.isArray(existingReceipt?.vouchersHistory)) {
+    return existingReceipt.vouchersHistory;
+  }
+  if (existingReceipt?.bankingVoucher?.isUploadedByTutor) {
+    return [existingReceipt.bankingVoucher];
+  }
+  return [];
+};
+
+const collectStudentVouchers = (targetStudents, periodLabel, defaultDueDate, vouchersMap) => {
+  targetStudents.forEach((st) => {
+    const stVouchers = Array.isArray(st.comprobantesPago) ? st.comprobantesPago : [];
+    stVouchers.forEach((sv, idx) => {
+      if (String(sv.invoicePeriod || '').toLowerCase() === periodLabel.toLowerCase()) {
+        const key = sv.operationCode || sv.id || `sv-${st.id}-${idx}`;
+        if (!vouchersMap.has(key)) {
+          vouchersMap.set(key, {
+            id: sv.id || key,
+            operationCode: sv.operationCode || 'TRF-ALU',
+            originBank: sv.originBank || 'Transferencia Bancaria',
+            operationDate: sv.uploadDate || defaultDueDate,
+            transferredAmount: Number(sv.declaredAmount) || 0,
+            selectedItems: Array.isArray(sv.selectedItems) ? sv.selectedItems : [],
+            selectedItemLabels: Array.isArray(sv.selectedItemLabels) ? sv.selectedItemLabels : [],
+            fileName: sv.fileName || 'comprobante.pdf',
+            fileSize: sv.fileSize || '',
+            fileUrl: sv.fileUrl || '',
+            storagePath: sv.storagePath || '',
+            voucherStatus:
+              sv.status === 'aprobado' || sv.status === 'conciliado'
+                ? 'Conciliado OK'
+                : 'Pendiente de conciliación',
+          });
+        }
+      }
+    });
+  });
+};
+
+const collectReceiptVouchers = (matchingReceipt, defaultDueDate, vouchersMap) => {
+  if (!matchingReceipt) return;
+
+  if (Array.isArray(matchingReceipt.vouchersHistory)) {
+    matchingReceipt.vouchersHistory.forEach((vh, idx) => {
+      const key = vh.operationCode || vh.id || `vh-${idx}`;
+      vouchersMap.set(key, {
+        id: vh.id || key,
+        operationCode: vh.operationCode || `TRF-${idx + 1}`,
+        originBank: vh.originBank || 'Transferencia Bancaria',
+        operationDate: vh.operationDate || matchingReceipt.uploadDate || defaultDueDate,
+        transferredAmount: Number(vh.transferredAmount || vh.declaredAmount) || 0,
+        selectedItems: Array.isArray(vh.selectedItems) ? vh.selectedItems : [],
+        selectedItemLabels: Array.isArray(vh.selectedItemLabels) ? vh.selectedItemLabels : [],
+        fileName: vh.attachmentName || vh.fileName || 'comprobante.pdf',
+        fileSize: vh.attachmentSize || vh.fileSize || '',
+        fileUrl: vh.fileUrl || vh.downloadUrl || '',
+        storagePath: vh.storagePath || '',
+        voucherStatus: vh.voucherStatus || (matchingReceipt.status === 'aprobado' || matchingReceipt.status === 'conciliado' ? 'Conciliado OK' : 'En revisión'),
+      });
+    });
+  }
+
+  if (matchingReceipt.bankingVoucher) {
+    const bv = matchingReceipt.bankingVoucher;
+    const key = bv.operationCode || bv.attachmentName || `bv-${matchingReceipt.id}`;
+    if (!vouchersMap.has(key)) {
+      vouchersMap.set(key, {
+        id: key,
+        operationCode: bv.operationCode || matchingReceipt.receiptNumber || 'TRF-REG',
+        originBank: bv.originBank || bv.paymentType || 'Transferencia Bancaria',
+        operationDate: bv.operationDate || matchingReceipt.uploadDate || defaultDueDate,
+        transferredAmount: Number(bv.transferredAmount || matchingReceipt.declaredAmount) || 0,
+        selectedItems: resolveSelectedItems(bv, matchingReceipt),
+        selectedItemLabels: Array.isArray(bv.selectedItemLabels) ? bv.selectedItemLabels : [],
+        fileName: bv.attachmentName || 'comprobante.pdf',
+        fileSize: bv.attachmentSize || '',
+        fileUrl: bv.fileUrl || bv.downloadUrl || '',
+        storagePath: bv.storagePath || '',
+        voucherStatus:
+          bv.voucherStatus ||
+          (matchingReceipt.status === 'aprobado' || matchingReceipt.status === 'conciliado'
+            ? 'Conciliado OK'
+            : 'Pendiente de conciliación'),
+      });
+    }
+  }
+};
+
+const collectAssociatedVouchers = (matchingReceipt, targetStudents, periodMeta) => {
+  const vouchersMap = new Map();
+  collectReceiptVouchers(matchingReceipt, periodMeta.dueDate, vouchersMap);
+  collectStudentVouchers(targetStudents, periodMeta.label, periodMeta.dueDate, vouchersMap);
+  return Array.from(vouchersMap.values());
+};
+
+const resolveInvoiceStatus = (matchingReceipt, isApprovedInFirestore, pendingBalance, coveredAmount, associatedVouchersCount) => {
+  if (matchingReceipt?.status === 'rechazado') {
+    return {
+      status: 'rechazado',
+      statusLabel: 'Comprobante Observado / Rechazado',
+    };
+  }
+  if (isApprovedInFirestore && pendingBalance === 0) {
+    return {
+      status: 'conciliado',
+      statusLabel: 'Pagado y Conciliado',
+    };
+  }
+  if (associatedVouchersCount > 0 && pendingBalance > 0 && coveredAmount > 0) {
+    return {
+      status: 'pago_parcial',
+      statusLabel: `Pago Parcial (${associatedVouchersCount} comp.) · Resta saldo`,
+    };
+  }
+  if (associatedVouchersCount > 0 && pendingBalance === 0) {
+    return {
+      status: 'pendiente',
+      statusLabel: 'En Revisión / Pendiente de Conciliación',
+    };
+  }
+  if (associatedVouchersCount > 0) {
+    return {
+      status: 'pendiente',
+      statusLabel: 'En Revisión Administrativa',
+    };
+  }
+  return {
+    status: 'sin_comprobante',
+    statusLabel: 'Pendiente de Pago',
+  };
+};
+
+const BILLING_PERIODS_CATALOG = [
   { label: 'Noviembre 2026', monthNum: '11', year: 2026, dueDate: '10/11/2026', isoStart: '2026-11-01', isoEnd: '2026-11-30' },
   { label: 'Octubre 2026', monthNum: '10', year: 2026, dueDate: '10/10/2026', isoStart: '2026-10-01', isoEnd: '2026-10-31' },
   { label: 'Septiembre 2026', monthNum: '09', year: 2026, dueDate: '10/09/2026', isoStart: '2026-09-01', isoEnd: '2026-09-30' },
@@ -357,90 +496,8 @@ export const buildBillingInvoicesAndDebtReport = ({
     const allItems = childrenBreakdowns.flatMap((cb) => cb.items);
     const totalInvoiceAmount = allItems.reduce((sum, i) => sum + i.amount, 0);
 
-    // Recopilar todos los comprobantes asociados a esta factura (vouchersHistory + bankingVoucher + comprobantesPago del alumno)
-    const vouchersMap = new Map();
-
-    if (matchingReceipt) {
-      if (Array.isArray(matchingReceipt.vouchersHistory)) {
-        matchingReceipt.vouchersHistory.forEach((vh, idx) => {
-          const key = vh.operationCode || vh.id || `vh-${idx}`;
-          vouchersMap.set(key, {
-            id: vh.id || key,
-            operationCode: vh.operationCode || `TRF-${idx + 1}`,
-            originBank: vh.originBank || 'Transferencia Bancaria',
-            operationDate: vh.operationDate || matchingReceipt.uploadDate || periodMeta.dueDate,
-            transferredAmount: Number(vh.transferredAmount || vh.declaredAmount) || 0,
-            selectedItems: Array.isArray(vh.selectedItems) ? vh.selectedItems : [],
-            selectedItemLabels: Array.isArray(vh.selectedItemLabels) ? vh.selectedItemLabels : [],
-            fileName: vh.attachmentName || vh.fileName || 'comprobante.pdf',
-            fileSize: vh.attachmentSize || vh.fileSize || '',
-            fileUrl: vh.fileUrl || vh.downloadUrl || '',
-            storagePath: vh.storagePath || '',
-            voucherStatus: vh.voucherStatus || (matchingReceipt.status === 'aprobado' || matchingReceipt.status === 'conciliado' ? 'Conciliado OK' : 'En revisión'),
-          });
-        });
-      }
-
-      if (matchingReceipt.bankingVoucher) {
-        const bv = matchingReceipt.bankingVoucher;
-        const key = bv.operationCode || bv.attachmentName || `bv-${matchingReceipt.id}`;
-        if (!vouchersMap.has(key)) {
-          vouchersMap.set(key, {
-            id: key,
-            operationCode: bv.operationCode || matchingReceipt.receiptNumber || 'TRF-REG',
-            originBank: bv.originBank || bv.paymentType || 'Transferencia Bancaria',
-            operationDate: bv.operationDate || matchingReceipt.uploadDate || periodMeta.dueDate,
-            transferredAmount: Number(bv.transferredAmount || matchingReceipt.declaredAmount) || 0,
-            selectedItems: Array.isArray(bv.selectedItems)
-              ? bv.selectedItems
-              : Array.isArray(matchingReceipt.selectedItems)
-                ? matchingReceipt.selectedItems
-                : [],
-            selectedItemLabels: Array.isArray(bv.selectedItemLabels) ? bv.selectedItemLabels : [],
-            fileName: bv.attachmentName || 'comprobante.pdf',
-            fileSize: bv.attachmentSize || '',
-            fileUrl: bv.fileUrl || bv.downloadUrl || '',
-            storagePath: bv.storagePath || '',
-            voucherStatus:
-              bv.voucherStatus ||
-              (matchingReceipt.status === 'aprobado' || matchingReceipt.status === 'conciliado'
-                ? 'Conciliado OK'
-                : 'Pendiente de conciliación'),
-          });
-        }
-      }
-    }
-
-    // También cruzar con comprobantesPago guardados directamente en students/{studentId}
-    targetStudents.forEach((st) => {
-      const stVouchers = Array.isArray(st.comprobantesPago) ? st.comprobantesPago : [];
-      stVouchers.forEach((sv, idx) => {
-        if (String(sv.invoicePeriod || '').toLowerCase() === periodMeta.label.toLowerCase()) {
-          const key = sv.operationCode || sv.id || `sv-${st.id}-${idx}`;
-          if (!vouchersMap.has(key)) {
-            vouchersMap.set(key, {
-              id: sv.id || key,
-              operationCode: sv.operationCode || 'TRF-ALU',
-              originBank: sv.originBank || 'Transferencia Bancaria',
-              operationDate: sv.uploadDate || periodMeta.dueDate,
-              transferredAmount: Number(sv.declaredAmount) || 0,
-              selectedItems: Array.isArray(sv.selectedItems) ? sv.selectedItems : [],
-              selectedItemLabels: Array.isArray(sv.selectedItemLabels) ? sv.selectedItemLabels : [],
-              fileName: sv.fileName || 'comprobante.pdf',
-              fileSize: sv.fileSize || '',
-              fileUrl: sv.fileUrl || '',
-              storagePath: sv.storagePath || '',
-              voucherStatus:
-                sv.status === 'aprobado' || sv.status === 'conciliado'
-                  ? 'Conciliado OK'
-                  : 'Pendiente de conciliación',
-            });
-          }
-        }
-      });
-    });
-
-    const associatedVouchers = Array.from(vouchersMap.values());
+    // Recopilar todos los comprobantes asociados a esta factura
+    const associatedVouchers = collectAssociatedVouchers(matchingReceipt, targetStudents, periodMeta);
 
     // Determinar ítems abonados y estado de la cuota
     const paidItemIdsSet = new Set();
@@ -488,25 +545,13 @@ export const buildBillingInvoicesAndDebtReport = ({
     const pendingBalance = pendingItems.reduce((sum, i) => sum + i.amount, 0);
     const coveredAmount = totalInvoiceAmount - pendingBalance;
 
-    let status = 'sin_comprobante'; // 'conciliado' | 'pendiente' | 'pago_parcial' | 'rechazado' | 'sin_comprobante'
-    let statusLabel = 'Pendiente de Pago';
-
-    if (matchingReceipt?.status === 'rechazado') {
-      status = 'rechazado';
-      statusLabel = 'Comprobante Observado / Rechazado';
-    } else if (isApprovedInFirestore && pendingBalance === 0) {
-      status = 'conciliado';
-      statusLabel = 'Pagado y Conciliado';
-    } else if (associatedVouchers.length > 0 && pendingBalance > 0 && coveredAmount > 0) {
-      status = 'pago_parcial';
-      statusLabel = `Pago Parcial (${associatedVouchers.length} comp.) · Resta saldo`;
-    } else if (associatedVouchers.length > 0 && pendingBalance === 0) {
-      status = 'pendiente';
-      statusLabel = 'En Revisión / Pendiente de Conciliación';
-    } else if (associatedVouchers.length > 0) {
-      status = 'pendiente';
-      statusLabel = 'En Revisión Administrativa';
-    }
+    const { status, statusLabel } = resolveInvoiceStatus(
+      matchingReceipt,
+      isApprovedInFirestore,
+      pendingBalance,
+      coveredAmount,
+      associatedVouchers.length
+    );
 
     return {
       id: matchingReceipt?.id || `inv-${periodMeta.monthNum}-${periodMeta.year}`,
@@ -698,11 +743,7 @@ export const submitTransferVoucherWithItems = async ({
     console.warn('Aviso consultando recibo previo en finance_receipts:', err?.message);
   }
 
-  const prevHistory = Array.isArray(existingReceipt?.vouchersHistory)
-    ? existingReceipt.vouchersHistory
-    : existingReceipt?.bankingVoucher?.isUploadedByTutor
-      ? [existingReceipt.bankingVoucher]
-      : [];
+  const prevHistory = resolvePreviousVouchers(existingReceipt);
 
   const nextVouchersHistory = [voucherEntry, ...prevHistory];
   const prevSelectedItems = Array.isArray(existingReceipt?.selectedItems)
@@ -750,15 +791,17 @@ export const submitTransferVoucherWithItems = async ({
 
   try {
     await setDoc(doc(db, 'finance_receipts', targetReceiptId), receiptPayload, { merge: true });
-  } catch {
-    // Si existingReceipt tenía status != 'pendiente' y firestore.rules bloqueó el update sobre ese docId,
-    // creamos un documento complementario determinístico para este envío
-    const fallbackDocId = `${targetReceiptId}-${Date.now()}`;
-    await setDoc(doc(db, 'finance_receipts', fallbackDocId), {
-      ...receiptPayload,
-      id: fallbackDocId,
-      parentReceiptId: targetReceiptId,
-    });
+  } catch (setDocErr) {
+    if (setDocErr) {
+      // Si existingReceipt tenía status != 'pendiente' y firestore.rules bloqueó el update sobre ese docId,
+      // creamos un documento complementario determinístico para este envío
+      const fallbackDocId = `${targetReceiptId}-${Date.now()}`;
+      await setDoc(doc(db, 'finance_receipts', fallbackDocId), {
+        ...receiptPayload,
+        id: fallbackDocId,
+        parentReceiptId: targetReceiptId,
+      });
+    }
   }
 
   // 3. Guardar en el array comprobantesPago de cada alumno involucrado (soportando múltiples comprobantes por período)

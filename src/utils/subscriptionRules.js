@@ -186,7 +186,8 @@ export const formatDateDisplay = (dateValue) => {
     const month = String(d.getMonth() + 1).padStart(2, '0');
     const year = d.getFullYear();
     return `${day}/${month}/${year}`;
-  } catch {
+  } catch (err) {
+    if (err) return String(dateValue);
     return String(dateValue);
   }
 };
@@ -360,6 +361,14 @@ const parseMinutesFromTimeStr = (timeStr = '') => {
   return h * 60 + m;
 };
 
+const parseDaysArray = (diasRaw) => {
+  if (Array.isArray(diasRaw)) return diasRaw;
+  if (typeof diasRaw === 'string') {
+    return diasRaw.split(',').map((d) => d.trim()).filter(Boolean);
+  }
+  return [];
+};
+
 export const parseHorariosFromDiscipline = (discipline) => {
   if (discipline?.horariosPorDia && typeof discipline.horariosPorDia === 'object') {
     return { ...discipline.horariosPorDia };
@@ -373,16 +382,38 @@ export const parseHorariosFromDiscipline = (discipline) => {
       defaultFin = match[2].padStart(5, '0');
     }
   }
-  const dias = Array.isArray(discipline?.dias)
-    ? discipline.dias
-    : typeof discipline?.dias === 'string'
-      ? discipline.dias.split(',').map((d) => d.trim()).filter(Boolean)
-      : [];
+  const dias = parseDaysArray(discipline?.dias);
   const result = {};
   dias.forEach((dia) => {
     result[dia] = { inicio: defaultInicio, fin: defaultFin };
   });
   return result;
+};
+
+const checkDayConflict = (tDay, targetSchedule, currentSchedule, currentDays, currentDiscipline) => {
+  const matchingDay = currentDays.find(
+    (cDay) => getDayOrderIndex(cDay) !== 99 && getDayOrderIndex(cDay) === getDayOrderIndex(tDay)
+  );
+  if (!matchingDay) return null;
+
+  const tSlot = targetSchedule[tDay] || { inicio: '16:00', fin: '17:30' };
+  const cSlot = currentSchedule[matchingDay] || { inicio: '16:00', fin: '17:30' };
+
+  const tStart = parseMinutesFromTimeStr(tSlot.inicio) ?? 960;
+  const tEnd = parseMinutesFromTimeStr(tSlot.fin) ?? 1050;
+  const cStart = parseMinutesFromTimeStr(cSlot.inicio) ?? 960;
+  const cEnd = parseMinutesFromTimeStr(cSlot.fin) ?? 1050;
+
+  if (tStart < cEnd && cStart < tEnd) {
+    return {
+      disciplineName: currentDiscipline.nombre || 'otra actividad',
+      day: tDay,
+      overlapLabel: `${tDay} (${tSlot.inicio} - ${tSlot.fin}) se superpone con "${
+        currentDiscipline.nombre || 'otra actividad'
+      }" (${cSlot.inicio} - ${cSlot.fin})`,
+    };
+  }
+  return null;
 };
 
 export const checkScheduleConflict = (enrolledDisciplines = [], targetDiscipline) => {
@@ -404,28 +435,8 @@ export const checkScheduleConflict = (enrolledDisciplines = [], targetDiscipline
       : Object.keys(currentSchedule);
 
     for (const tDay of targetDays) {
-      const matchingDay = currentDays.find(
-        (cDay) => getDayOrderIndex(cDay) !== 99 && getDayOrderIndex(cDay) === getDayOrderIndex(tDay)
-      );
-      if (!matchingDay) continue;
-
-      const tSlot = targetSchedule[tDay] || { inicio: '16:00', fin: '17:30' };
-      const cSlot = currentSchedule[matchingDay] || { inicio: '16:00', fin: '17:30' };
-
-      const tStart = parseMinutesFromTimeStr(tSlot.inicio) ?? 960;
-      const tEnd = parseMinutesFromTimeStr(tSlot.fin) ?? 1050;
-      const cStart = parseMinutesFromTimeStr(cSlot.inicio) ?? 960;
-      const cEnd = parseMinutesFromTimeStr(cSlot.fin) ?? 1050;
-
-      if (tStart < cEnd && cStart < tEnd) {
-        return {
-          disciplineName: current.nombre || 'otra actividad',
-          day: tDay,
-          overlapLabel: `${tDay} (${tSlot.inicio} - ${tSlot.fin}) se superpone con "${
-            current.nombre || 'otra actividad'
-          }" (${cSlot.inicio} - ${cSlot.fin})`,
-        };
-      }
+      const conflict = checkDayConflict(tDay, targetSchedule, currentSchedule, currentDays, current);
+      if (conflict) return conflict;
     }
   }
 

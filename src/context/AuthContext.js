@@ -14,6 +14,95 @@ import { auth, db, FUNCTIONS_BASE_URL } from '../services/firebase';
 const STORAGE_USER_KEY = '@educar_transformar_mobile_user';
 const AuthContext = createContext(null);
 
+/**
+ * Genera formato alternativo de contraseña si el input corresponde a un DNI
+ * (agrega puntos si tiene 7-9 dígitos continuos, o quita puntos si los tiene).
+ */
+const buildAlternateDniPassword = (rawPwd) => {
+  const isDigitsOnly = /^\d{7,9}$/.test(rawPwd);
+  const isDniWithDots = /^\d{1,2}\.\d{3}\.\d{3}$/.test(rawPwd);
+
+  if (isDigitsOnly) {
+    const len = rawPwd.length;
+    return `${rawPwd.slice(0, len - 6)}.${rawPwd.slice(len - 6, len - 3)}.${rawPwd.slice(len - 3)}`;
+  }
+  if (isDniWithDots) {
+    return rawPwd.replace(/\./g, '');
+  }
+  return null;
+};
+
+/**
+ * Consulta el perfil institucional correspondiente en Firestore según rol y uid.
+ */
+const fetchUserProfile = async (firebaseUser, claimsRole) => {
+  if (claimsRole === 'Estudiante') {
+    const stSnap = await getDoc(doc(db, 'students', firebaseUser.uid));
+    return {
+      role: 'Estudiante',
+      profileData: stSnap.exists() ? stSnap.data() : {},
+    };
+  }
+
+  const userSnap = await getDoc(doc(db, 'users', firebaseUser.uid));
+  if (userSnap.exists()) {
+    const data = userSnap.data();
+    return {
+      role: claimsRole || data.role || 'Padre',
+      profileData: data,
+    };
+  }
+
+  // Si no está en users, intentar leer de students como contingencia
+  const fallbackSnap = await getDoc(doc(db, 'students', firebaseUser.uid));
+  if (fallbackSnap.exists()) {
+    return {
+      role: 'Estudiante',
+      profileData: fallbackSnap.data(),
+    };
+  }
+
+  return {
+    role: claimsRole || 'Padre',
+    profileData: {},
+  };
+};
+
+/**
+ * Login de alumno mediante Cloud Function cf_loginStudent (devuelve customToken).
+ */
+const loginStudentViaCloudFunction = async (cleanId, rawPwd) => {
+  const normalizedLegajo = cleanId.startsWith('#') ? cleanId.slice(1) : cleanId;
+  let response = await fetch(`${FUNCTIONS_BASE_URL}/cf_loginStudent`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ studentID_login: normalizedLegajo, password: rawPwd }),
+  });
+
+  // Reintento con prefijo '#' si el backend lo almacenó de forma estricta
+  if (!response.ok && !cleanId.startsWith('#')) {
+    response = await fetch(`${FUNCTIONS_BASE_URL}/cf_loginStudent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ studentID_login: `#${normalizedLegajo}`, password: rawPwd }),
+    });
+  }
+
+  if (!response.ok) {
+    let errorMessage = 'Credenciales de alumno incorrectas.';
+    try {
+      const errData = await response.json();
+      if (errData?.error) errorMessage = errData.error;
+    } catch (_err) {
+      // Usar mensaje de error por defecto
+    }
+    throw new Error(errorMessage);
+  }
+
+  const { customToken } = await response.json();
+  return signInWithCustomToken(auth, customToken);
+};
+
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -27,8 +116,8 @@ export const AuthProvider = ({ children }) => {
         if (cached && mounted && !auth.currentUser) {
           setUser(JSON.parse(cached));
         }
-      } catch {
-        // Ignorar error de lectura local
+      } catch (_err) {
+        // Ignorar error de lectura de caché local
       }
     };
     void loadCachedSession();
@@ -36,57 +125,38 @@ export const AuthProvider = ({ children }) => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (!mounted) return;
 
-      if (firebaseUser) {
-        try {
-          // Obligatorio: forceRefresh = true para obtener Custom Claims actualizados (role, studentId)
-          const idTokenResult = await firebaseUser.getIdTokenResult(true);
-          let role = idTokenResult.claims.role || null;
-          const studentId = idTokenResult.claims.studentId || null;
-
-          let profileData = {};
-          if (role === 'Estudiante') {
-            const stSnap = await getDoc(doc(db, 'students', firebaseUser.uid));
-            if (stSnap.exists()) {
-              profileData = stSnap.data();
-            }
-          } else {
-            const userSnap = await getDoc(doc(db, 'users', firebaseUser.uid));
-            if (userSnap.exists()) {
-              profileData = userSnap.data();
-              if (!role && profileData.role) {
-                role = profileData.role;
-              }
-            } else {
-              const stSnap = await getDoc(doc(db, 'students', firebaseUser.uid));
-              if (stSnap.exists()) {
-                profileData = stSnap.data();
-                role = 'Estudiante';
-              }
-            }
-          }
-
-          const loggedUser = {
-            uid: firebaseUser.uid,
-            email: firebaseUser.email || profileData.email || '',
-            role: role || profileData.role || 'Padre',
-            studentId,
-            ...profileData,
-          };
-
-          setUser(loggedUser);
-          await AsyncStorage.setItem(STORAGE_USER_KEY, JSON.stringify(loggedUser));
-        } catch (err) {
-          console.warn('Error obteniendo claims/perfil de Firebase:', err?.message);
-          setUser(null);
-          await AsyncStorage.removeItem(STORAGE_USER_KEY);
-        }
-      } else {
+      if (!firebaseUser) {
         setUser(null);
         await AsyncStorage.removeItem(STORAGE_USER_KEY);
+        setLoading(false);
+        return;
       }
 
-      if (mounted) {
-        setLoading(false);
+      try {
+        const idTokenResult = await firebaseUser.getIdTokenResult(true);
+        const claimsRole = idTokenResult.claims.role || null;
+        const studentId = idTokenResult.claims.studentId || null;
+
+        const { role, profileData } = await fetchUserProfile(firebaseUser, claimsRole);
+
+        const loggedUser = {
+          uid: firebaseUser.uid,
+          email: firebaseUser.email || profileData.email || '',
+          role,
+          studentId,
+          ...profileData,
+        };
+
+        setUser(loggedUser);
+        await AsyncStorage.setItem(STORAGE_USER_KEY, JSON.stringify(loggedUser));
+      } catch (err) {
+        console.warn('Error obteniendo claims/perfil de Firebase:', err?.message);
+        setUser(null);
+        await AsyncStorage.removeItem(STORAGE_USER_KEY);
+      } finally {
+        if (mounted) {
+          setLoading(false);
+        }
       }
     });
 
@@ -112,36 +182,7 @@ export const AuthProvider = ({ children }) => {
     const isStudentLegajo = isStudentOrTutor && !cleanId.includes('@');
 
     if (isStudentLegajo) {
-      // Login de Estudiante mediante Cloud Function cf_loginStudent
-      const normalizedLegajo = cleanId.startsWith('#') ? cleanId.slice(1) : cleanId;
-      let response = await fetch(`${FUNCTIONS_BASE_URL}/cf_loginStudent`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ studentID_login: normalizedLegajo, password: rawPwd }),
-      });
-
-      // Si el legajo está guardado con '#' en Firestore, reintentar con '#'
-      if (!response.ok && !cleanId.startsWith('#')) {
-        response = await fetch(`${FUNCTIONS_BASE_URL}/cf_loginStudent`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ studentID_login: `#${normalizedLegajo}`, password: rawPwd }),
-        });
-      }
-
-      if (!response.ok) {
-        let errorMessage = 'Credenciales de alumno incorrectas.';
-        try {
-          const errData = await response.json();
-          if (errData?.error) errorMessage = errData.error;
-        } catch {
-          // Usar mensaje por defecto
-        }
-        throw new Error(errorMessage);
-      }
-
-      const { customToken } = await response.json();
-      return signInWithCustomToken(auth, customToken);
+      return loginStudentViaCloudFunction(cleanId, rawPwd);
     }
 
     // Login de Padre / Tutor / Staff con tolerancia automática de formato DNI (sin puntos <-> con puntos)
@@ -153,34 +194,22 @@ export const AuthProvider = ({ children }) => {
         authError?.code === 'auth/wrong-password' ||
         authError?.message?.includes('INVALID_LOGIN_CREDENTIALS');
 
-      if (isCredentialError) {
-        const isDigitsOnly = /^\d{7,9}$/.test(rawPwd);
-        const isDniWithDots = /^\d{1,2}\.\d{3}\.\d{3}$/.test(rawPwd);
-
-        let alternatePassword = null;
-        if (isDigitsOnly) {
-          const len = rawPwd.length;
-          alternatePassword = `${rawPwd.slice(0, len - 6)}.${rawPwd.slice(
-            len - 6,
-            len - 3
-          )}.${rawPwd.slice(len - 3)}`;
-        } else if (isDniWithDots) {
-          alternatePassword = rawPwd.replace(/\./g, '');
-        }
-
-        if (alternatePassword && alternatePassword !== rawPwd) {
-          try {
-            return await signInWithEmailAndPassword(auth, cleanId, alternatePassword);
-          } catch {
-            // Continuar para lanzar error legible
-          }
-        }
-        throw new Error(
-          'Correo electrónico o contraseña incorrectos. Recuerde que su clave inicial por defecto es su número de DNI.'
-        );
+      if (!isCredentialError) {
+        throw new Error(authError?.message || 'Error al iniciar sesión en Firebase Auth.');
       }
 
-      throw new Error(authError?.message || 'Error al iniciar sesión en Firebase Auth.');
+      const alternatePassword = buildAlternateDniPassword(rawPwd);
+      if (alternatePassword && alternatePassword !== rawPwd) {
+        try {
+          return await signInWithEmailAndPassword(auth, cleanId, alternatePassword);
+        } catch (_retryErr) {
+          // Si falla el reintento con formato alternativo, emitir mensaje explicativo
+        }
+      }
+
+      throw new Error(
+        'Correo electrónico o contraseña incorrectos. Recuerde que su clave inicial por defecto es su número de DNI.'
+      );
     }
   }, []);
 
@@ -258,8 +287,8 @@ export const AuthProvider = ({ children }) => {
     setUser(null);
     try {
       await signOut(auth);
-    } catch {
-      // Continuar
+    } catch (_err) {
+      // Continuar con éxito local si falla la red al cerrar sesión
     }
   }, []);
 
