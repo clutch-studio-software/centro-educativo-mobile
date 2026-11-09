@@ -88,6 +88,16 @@ const resolveDiningButtonText = ({ bajaSolicitada, bajaProgramada, canCancelToda
   return 'Solicitar Baja para el Próximo Mes';
 };
 
+const resolveSportOccupiedCount = (disc, student, isEnrolled) => {
+  const inscriptos = Array.isArray(disc.inscriptos) ? disc.inscriptos : [];
+  const studentId = String(student?.id || '').trim();
+  const inRoster =
+    Boolean(studentId) &&
+    inscriptos.some((ins) => String(ins?.id || ins?.studentId || '').trim() === studentId);
+  const baseOccupied = Math.max(Number(disc.cupoOcupado) || 0, inscriptos.length);
+  return isEnrolled && !inRoster ? baseOccupied + 1 : baseOccupied;
+};
+
 const SportCardItem = ({
   disc,
   student,
@@ -114,7 +124,7 @@ const SportCardItem = ({
     ? checkScheduleConflict(enrolledDisciplines, disc)
     : null;
   const cupoMax = Number(disc.cupoMax) || 25;
-  const cupoOcupado = Number(disc.cupoOcupado) || (disc.inscriptos?.length || 0);
+  const cupoOcupado = resolveSportOccupiedCount(disc, student, isEnrolled);
   const isFull = cupoOcupado >= cupoMax && !isEnrolled;
   const reachedMaxSports = enrolledDisciplines.length >= 2 && !isEnrolled;
 

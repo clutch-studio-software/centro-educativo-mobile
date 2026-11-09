@@ -45,7 +45,7 @@ const MobilePortalShell = () => {
     return (
       <View style={styles.centeredScreen}>
         <ActivityIndicator size="large" color={COLORS.accent} />
-        <Text style={styles.loadingText}>Verificando sesión en Firebase Auth...</Text>
+        <Text style={styles.loadingText}>Validando sesión</Text>
       </View>
     );
   }
@@ -199,7 +199,7 @@ const MobilePortalShell = () => {
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.brandTitle} numberOfLines={1}>
-              Educar para Transformar
+              Centro Educativo - {user?.role === 'Padre' ? 'Portal de Padres' : 'Portal de Alumno'}
             </Text>
             <Text style={styles.userSub} numberOfLines={1}>
               {user?.nombre || user?.email}

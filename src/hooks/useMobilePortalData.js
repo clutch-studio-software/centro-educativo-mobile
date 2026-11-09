@@ -13,6 +13,7 @@ import {
   TRANSPORT_ROUTES,
   INITIAL_DISCIPLINES,
 } from '../utils/subscriptionRules';
+import { reconcileFamilyReceiptsInFirestore } from '../services/billingMobileService';
 
 const DEFAULT_SUBJECTS_BY_LEVEL = {
   inicial: [
@@ -303,6 +304,20 @@ export const useMobilePortalData = (user) => {
       unsubAcademic();
     };
   }, [user]);
+
+  // Consolidación automática de recibos de la familia en Firestore (evita duplicados y completa desglose de hijos)
+  useEffect(() => {
+    if (!isParentRole || linkedStudents.length === 0 || financeReceipts.length === 0) {
+      return;
+    }
+    void reconcileFamilyReceiptsInFirestore({
+      tutorUser: user,
+      linkedStudents,
+      financeReceipts,
+      tariffsConfig,
+      allDisciplines,
+    });
+  }, [isParentRole, user, linkedStudents, financeReceipts, tariffsConfig, allDisciplines]);
 
   // Alumno actualmente seleccionado
   const currentStudent = useMemo(() => {

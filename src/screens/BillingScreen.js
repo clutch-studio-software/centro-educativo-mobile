@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -13,12 +13,14 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, formatCurrencyARS } from '../theme/colors';
 import {
-  BILLING_PERIODS_CATALOG,
   buildBillingInvoicesAndDebtReport,
   submitTransferVoucherWithItems,
 } from '../services/billingMobileService';
 import { pickAllowedDocument, formatFileSize } from '../services/storageMobileService';
 import DigitalPaymentReceiptModal from '../components/DigitalPaymentReceiptModal';
+import InlineCalendarPicker, {
+  formatIsoToDisplay,
+} from '../components/InlineCalendarPicker';
 
 const DATE_PRESETS = [
   {
@@ -58,70 +60,6 @@ const DATE_PRESETS = [
   },
 ];
 
-const MONTH_NAMES_ES = [
-  'Enero',
-  'Febrero',
-  'Marzo',
-  'Abril',
-  'Mayo',
-  'Junio',
-  'Julio',
-  'Agosto',
-  'Septiembre',
-  'Octubre',
-  'Noviembre',
-  'Diciembre',
-];
-
-const WEEKDAYS_SHORT = ['Lu', 'Ma', 'Mi', 'Ju', 'Vi', 'Sá', 'Do'];
-
-const padTwoDigits = (num) => String(num).padStart(2, '0');
-
-const parseIsoDateParts = (isoStr) => {
-  const parts = String(isoStr || '2026-11-01').split('-');
-  const year = Number(parts[0]) || 2026;
-  const month = Math.min(12, Math.max(1, Number(parts[1]) || 11));
-  const day = Math.min(31, Math.max(1, Number(parts[2]) || 1));
-  return { year, month, day };
-};
-
-const buildIsoDate = (year, month, day) =>
-  `${year}-${padTwoDigits(month)}-${padTwoDigits(day)}`;
-
-const formatIsoToDisplay = (isoStr) => {
-  const { year, month, day } = parseIsoDateParts(isoStr);
-  return `${padTwoDigits(day)}/${padTwoDigits(month)}/${year}`;
-};
-
-const buildCalendarWeeks = (year, month) => {
-  const daysInMonth = new Date(year, month, 0).getDate();
-  const firstDayOffset = (new Date(year, month - 1, 1).getDay() + 6) % 7;
-  const flatCells = [];
-
-  for (let i = 0; i < firstDayOffset; i += 1) {
-    flatCells.push({ key: `empty-start-${i}`, day: null, isoDate: null });
-  }
-
-  for (let day = 1; day <= daysInMonth; day += 1) {
-    const isoDate = buildIsoDate(year, month, day);
-    flatCells.push({ key: isoDate, day, isoDate });
-  }
-
-  while (flatCells.length % 7 !== 0) {
-    flatCells.push({
-      key: `empty-end-${flatCells.length}`,
-      day: null,
-      isoDate: null,
-    });
-  }
-
-  const weeks = [];
-  for (let idx = 0; idx < flatCells.length; idx += 7) {
-    weeks.push(flatCells.slice(idx, idx + 7));
-  }
-  return weeks;
-};
-
 const resolvePresetIdForDates = (dateFrom, dateTo) => {
   const found = DATE_PRESETS.find(
     (p) => p.id !== 'custom' && p.from === dateFrom && p.to === dateTo
@@ -146,7 +84,30 @@ const getItemStatusBadge = (itemStatus) => {
   if (itemStatus === 'en_revision') {
     return { color: COLORS.amber, label: 'En revisión' };
   }
+  if (itemStatus === 'observado') {
+    return { color: COLORS.rose, label: 'Observado' };
+  }
   return { color: COLORS.rose, label: 'Pendiente' };
+};
+
+const getDebtItemStatusLabel = (itemStatus) => {
+  if (itemStatus === 'en_revision') {
+    return 'Comprobante en Revisión';
+  }
+  if (itemStatus === 'observado') {
+    return 'Comprobante Observado — Requiere Respaldo';
+  }
+  return 'Pendiente de Transferencia';
+};
+
+const resolvePrimaryPayButtonLabel = (invoice) => {
+  if (invoice.status === 'rechazado') {
+    return 'Añadir documentación / comprobante de respaldo';
+  }
+  if (invoice.pendingBalance > 0) {
+    return 'Enviar comprobante de transferencia';
+  }
+  return 'Enviar comprobante';
 };
 
 const resolveInvoiceStatusTheme = (status) => {
@@ -195,125 +156,6 @@ const InvoiceStatusBadge = ({ status, statusLabel }) => {
       <Text style={[styles.statusBadgeText, { color: theme.text }]}>
         {statusLabel}
       </Text>
-    </View>
-  );
-};
-
-/**
- * Calendario interactivo para seleccionar fecha Desde o Hasta
- */
-const InlineCalendarPicker = ({
-  activeField,
-  draftFrom,
-  draftTo,
-  onSelectDate,
-}) => {
-  const targetIso = activeField === 'from' ? draftFrom : draftTo;
-  const initialParts = parseIsoDateParts(targetIso);
-  const [viewYear, setViewYear] = useState(initialParts.year);
-  const [viewMonth, setViewMonth] = useState(initialParts.month);
-
-  const weeks = useMemo(
-    () => buildCalendarWeeks(viewYear, viewMonth),
-    [viewYear, viewMonth]
-  );
-
-  const handlePrevMonth = () => {
-    if (viewMonth === 1) {
-      setViewMonth(12);
-      setViewYear((y) => y - 1);
-    } else {
-      setViewMonth((m) => m - 1);
-    }
-  };
-
-  const handleNextMonth = () => {
-    if (viewMonth === 12) {
-      setViewMonth(1);
-      setViewYear((y) => y + 1);
-    } else {
-      setViewMonth((m) => m + 1);
-    }
-  };
-
-  return (
-    <View style={styles.calendarCard}>
-      <View style={styles.calendarHeader}>
-        <TouchableOpacity
-          style={styles.calendarNavBtn}
-          onPress={handlePrevMonth}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="chevron-back" size={16} color={COLORS.primary} />
-        </TouchableOpacity>
-
-        <View style={{ alignItems: 'center' }}>
-          <Text style={styles.calendarMonthTitle}>
-            {MONTH_NAMES_ES[viewMonth - 1]} {viewYear}
-          </Text>
-          <Text style={styles.calendarEditingHint}>
-            {activeField === 'from'
-              ? 'Seleccione la fecha Desde'
-              : 'Seleccione la fecha Hasta'}
-          </Text>
-        </View>
-
-        <TouchableOpacity
-          style={styles.calendarNavBtn}
-          onPress={handleNextMonth}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="chevron-forward" size={16} color={COLORS.primary} />
-        </TouchableOpacity>
-      </View>
-
-      <View style={styles.calendarWeekdaysRow}>
-        {WEEKDAYS_SHORT.map((dayName) => (
-          <Text key={dayName} style={styles.calendarWeekdayText}>
-            {dayName}
-          </Text>
-        ))}
-      </View>
-
-      <View style={styles.calendarGrid}>
-        {weeks.map((week, wIdx) => (
-          <View key={`week-${wIdx}`} style={styles.calendarWeekRow}>
-            {week.map((cell) => {
-              if (!cell.day) {
-                return <View key={cell.key} style={styles.calendarDayCell} />;
-              }
-
-              const isEndpoint =
-                cell.isoDate === draftFrom || cell.isoDate === draftTo;
-              const isInRange =
-                cell.isoDate > draftFrom && cell.isoDate < draftTo;
-
-              return (
-                <TouchableOpacity
-                  key={cell.key}
-                  style={[
-                    styles.calendarDayCell,
-                    isInRange && styles.calendarDayCellInRange,
-                    isEndpoint && styles.calendarDayCellEndpoint,
-                  ]}
-                  onPress={() => onSelectDate(cell.isoDate)}
-                  activeOpacity={0.75}
-                >
-                  <Text
-                    style={[
-                      styles.calendarDayText,
-                      isInRange && styles.calendarDayTextInRange,
-                      isEndpoint && styles.calendarDayTextEndpoint,
-                    ]}
-                  >
-                    {cell.day}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        ))}
-      </View>
     </View>
   );
 };
@@ -565,6 +407,7 @@ const DatePeriodFilterModal = ({
               {activeCalendarField && (
                 <InlineCalendarPicker
                   key={activeCalendarField}
+                  mode="range"
                   activeField={activeCalendarField}
                   draftFrom={draftFrom}
                   draftTo={draftTo}
@@ -667,9 +510,55 @@ const InvoiceMonthSummaryCard = ({ invoice, onPress }) => {
 };
 
 /**
+ * Modal de aviso de redirección al navegador para visualizar comprobantes
+ */
+const RedirectVoucherModal = ({ visible, secondsLeft, onCancel }) => (
+  <Modal
+    visible={visible}
+    transparent
+    animationType="fade"
+    onRequestClose={onCancel}
+  >
+    <View style={styles.redirectModalBackdrop}>
+      <View style={styles.redirectModalCard}>
+        <View style={styles.redirectIconBox}>
+          <Ionicons name="open-outline" size={26} color={COLORS.emerald} />
+        </View>
+
+        <Text style={styles.redirectModalTitle}>Abriendo Comprobante</Text>
+
+        <Text style={styles.redirectModalMessage}>
+          Serás redirigido fuera de la aplicación para ver el comprobante en un navegador.
+        </Text>
+
+        <View style={styles.redirectProgressRow}>
+          <ActivityIndicator size="small" color={COLORS.emerald} />
+          <Text style={styles.redirectCountdownText}>
+            Redirigiendo en {secondsLeft} {secondsLeft === 1 ? 'segundo' : 'segundos'}...
+          </Text>
+        </View>
+
+        <TouchableOpacity
+          style={styles.redirectCancelBtn}
+          onPress={onCancel}
+          activeOpacity={0.75}
+        >
+          <Text style={styles.redirectCancelBtnText}>Cancelar</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  </Modal>
+);
+
+/**
  * Vista dedicada con el detalle completo del mes seleccionado
  */
-const InvoiceMonthDetailView = ({ invoice, onBack, onPayInvoice }) => (
+const InvoiceMonthDetailView = ({
+  invoice,
+  onBack,
+  onPayInvoice,
+  onViewVoucher,
+}) => (
   <View style={styles.sectionWrap}>
     <TouchableOpacity
       style={styles.backToMonthsBtn}
@@ -724,14 +613,40 @@ const InvoiceMonthDetailView = ({ invoice, onBack, onPayInvoice }) => (
         </View>
       </View>
 
-      {invoice.pendingBalance > 0 && (
+      {invoice.status === 'rechazado' && (
+        <View style={styles.rejectedAlertBox}>
+          <Ionicons name="alert-circle" size={18} color={COLORS.rose} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.rejectedAlertTitle}>
+              Comprobante observado por Administración
+            </Text>
+            <Text style={styles.rejectedAlertText}>
+              {invoice.rejectionReason ||
+                'El monto o comprobante informado presenta observaciones. Puede añadir otra transferencia o documentación respaldatoria para completar su abono.'}
+            </Text>
+          </View>
+        </View>
+      )}
+
+      {invoice.status !== 'conciliado' && (
         <TouchableOpacity
-          style={styles.payInvoiceBtn}
+          style={[
+            styles.payInvoiceBtn,
+            invoice.status === 'rechazado' && styles.payInvoiceBtnResubmit,
+          ]}
           onPress={() => onPayInvoice(invoice)}
         >
-          <Ionicons name="card-outline" size={17} color={COLORS.white} />
+          <Ionicons
+            name={
+              invoice.status === 'rechazado'
+                ? 'document-attach-outline'
+                : 'card-outline'
+            }
+            size={17}
+            color={COLORS.white}
+          />
           <Text style={styles.payInvoiceBtnText}>
-            Enviar comprobante de transferencia
+            {resolvePrimaryPayButtonLabel(invoice)}
           </Text>
         </TouchableOpacity>
       )}
@@ -804,14 +719,14 @@ const InvoiceMonthDetailView = ({ invoice, onBack, onPayInvoice }) => (
             {v.fileUrl ? (
               <TouchableOpacity
                 style={styles.openFileBtn}
-                onPress={() => Linking.openURL(v.fileUrl)}
+                onPress={() => onViewVoucher(v.fileUrl)}
               >
                 <Ionicons
                   name="open-outline"
                   size={14}
                   color={COLORS.emerald}
                 />
-                <Text style={styles.openFileBtnText}>Ver Archivo</Text>
+                <Text style={styles.openFileBtnText}>Ver comprobante</Text>
               </TouchableOpacity>
             ) : null}
           </View>
@@ -831,23 +746,57 @@ const BillingScreen = ({
   onStudentUpdated,
   onFeedback,
 }) => {
-  const [subTab, setSubTab] = useState('invoices'); // 'invoices' | 'debt' | 'pay' | 'emails'
+  const [subTab, setSubTab] = useState('invoices'); // 'invoices' | 'debt'
   const [dateFrom, setDateFrom] = useState('2026-08-01');
   const [dateTo, setDateTo] = useState('2026-11-30');
   const [statusFilter, setStatusFilter] = useState('all'); // 'all' | 'pending' | 'paid'
   const [isPeriodModalOpen, setIsPeriodModalOpen] = useState(false);
   const [selectedInvoicePeriod, setSelectedInvoicePeriod] = useState(null);
+  const [isUploadingForSelectedMonth, setIsUploadingForSelectedMonth] =
+    useState(false);
 
-  // Estado para el formulario de pago con selección de ítems
+  // Estado para el formulario de pago con selección de ítems (automático según el mes en detalle)
   const [targetPeriod, setTargetPeriod] = useState('Noviembre 2026');
   const [selectedItemIds, setSelectedItemIds] = useState([]);
   const [customAmount, setCustomAmount] = useState('');
   const [operationCode, setOperationCode] = useState('');
   const [originBank] = useState('Banco Santander Río');
   const [transferDate, setTransferDate] = useState('2026-11-06');
+  const [isTransferCalendarOpen, setIsTransferCalendarOpen] = useState(false);
   const [pickedFile, setPickedFile] = useState(null);
   const [submittingPayment, setSubmittingPayment] = useState(false);
   const [emittedDigitalReceipt, setEmittedDigitalReceipt] = useState(null);
+  const [redirectUrl, setRedirectUrl] = useState(null);
+  const [redirectCountdown, setRedirectCountdown] = useState(5);
+
+  useEffect(() => {
+    if (!redirectUrl) return undefined;
+
+    const intervalId = setInterval(() => {
+      setRedirectCountdown((prev) => {
+        if (prev <= 1) {
+          clearInterval(intervalId);
+          Linking.openURL(redirectUrl).catch(() => {});
+          setRedirectUrl(null);
+          return 5;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(intervalId);
+  }, [redirectUrl]);
+
+  const handleRequestOpenVoucher = (url) => {
+    if (!url) return;
+    setRedirectCountdown(5);
+    setRedirectUrl(url);
+  };
+
+  const handleCancelRedirect = () => {
+    setRedirectUrl(null);
+    setRedirectCountdown(5);
+  };
 
   // Reporte integral de facturación y deuda
   const billingReport = useMemo(() => {
@@ -1000,6 +949,9 @@ const BillingScreen = ({
         originBank,
         transferDate,
         fileAsset: pickedFile,
+        tariffsConfig,
+        allDisciplines,
+        existingReceiptsPool: financeReceipts,
       });
 
       if (result.updatedStudentsMap && onStudentUpdated) {
@@ -1018,6 +970,8 @@ const BillingScreen = ({
       setOperationCode('');
       setCustomAmount('');
       setSelectedItemIds([]);
+      setIsTransferCalendarOpen(false);
+      setIsUploadingForSelectedMonth(false);
 
       onFeedback?.({
         type: 'success',
@@ -1034,30 +988,334 @@ const BillingScreen = ({
   };
 
   const handleQuickPayFromDebtItem = (debtItem) => {
-    setTargetPeriod(debtItem.period || 'Noviembre 2026');
+    const period = debtItem.period || 'Noviembre 2026';
+    setSelectedInvoicePeriod(period);
+    setTargetPeriod(period);
     setSelectedItemIds([debtItem.id]);
     setCustomAmount(String(debtItem.amount));
-    setSelectedInvoicePeriod(null);
-    setSubTab('pay');
+    setIsTransferCalendarOpen(false);
+    setIsUploadingForSelectedMonth(true);
+    setSubTab('invoices');
   };
 
   const handlePayFromInvoiceDetail = (inv) => {
     setTargetPeriod(inv.period);
+    const pendingOrObservedIds = inv.items
+      .filter((i) => !i.isPaidOrInReview)
+      .map((i) => i.id);
+    const fallbackAllIds = inv.items.map((i) => i.id);
     setSelectedItemIds(
-      inv.items.filter((i) => !i.isPaidOrInReview).map((i) => i.id)
+      pendingOrObservedIds.length > 0 ? pendingOrObservedIds : fallbackAllIds
     );
-    setCustomAmount(String(inv.pendingBalance));
-    setSelectedInvoicePeriod(null);
-    setSubTab('pay');
+    setCustomAmount(
+      String(inv.pendingBalance > 0 ? inv.pendingBalance : inv.totalAmount)
+    );
+    setIsTransferCalendarOpen(false);
+    setIsUploadingForSelectedMonth(true);
   };
 
+  const renderMonthVoucherUploadView = () => (
+    <View style={styles.sectionWrap}>
+      <TouchableOpacity
+        style={styles.backToMonthsBtn}
+        onPress={() => {
+          setIsTransferCalendarOpen(false);
+          setIsUploadingForSelectedMonth(false);
+        }}
+        activeOpacity={0.75}
+      >
+        <Ionicons name="arrow-back" size={18} color={COLORS.primary} />
+        <Text style={styles.backToMonthsText}>
+          Volver al detalle de {activeInvoiceForPayment?.period || targetPeriod}
+        </Text>
+      </TouchableOpacity>
+
+      {/* Encabezado automático del mes a imputar */}
+      <View style={styles.autoPeriodHeaderCard}>
+        <View style={styles.autoPeriodRow}>
+          <View style={styles.periodIconBox}>
+            <Ionicons
+              name="calendar-clear-outline"
+              size={18}
+              color={COLORS.emerald}
+            />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.periodSelectorLabel}>
+              PERÍODO A IMPUTAR AUTOMÁTICAMENTE
+            </Text>
+            <Text style={styles.autoPeriodTitle}>
+              {activeInvoiceForPayment?.period || targetPeriod}
+            </Text>
+            {activeInvoiceForPayment?.dueDate ? (
+              <Text style={styles.autoPeriodSub}>
+                Vencimiento: {activeInvoiceForPayment.dueDate}
+              </Text>
+            ) : null}
+          </View>
+        </View>
+
+        {activeInvoiceForPayment?.status === 'rechazado' && (
+          <View style={styles.rejectedAlertBox}>
+            <Ionicons name="alert-circle" size={17} color={COLORS.rose} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.rejectedAlertTitle}>
+                Documentación de respaldo por comprobante observado
+              </Text>
+              <Text style={styles.rejectedAlertText}>
+                {activeInvoiceForPayment.rejectionReason
+                  ? `Motivo informado: "${activeInvoiceForPayment.rejectionReason}". `
+                  : ''}
+                Puede adjuntar aquí una nueva transferencia por la diferencia de monto o documentación respaldatoria adicional.
+              </Text>
+            </View>
+          </View>
+        )}
+
+        {activeInvoiceForPayment?.vouchersCount > 0 && (
+          <View style={styles.multiVoucherNotice}>
+            <Ionicons name="layers-outline" size={16} color={COLORS.indigo} />
+            <Text style={styles.multiVoucherNoticeText}>
+              Esta factura ya registra {activeInvoiceForPayment.vouchersCount}{' '}
+              comprobante(s) previo(s). La nueva documentación se sumará al historial del mes para respaldar su abono.
+            </Text>
+          </View>
+        )}
+      </View>
+
+      {/* Datos Bancarios Oficiales (Sin efectivo) */}
+      <View style={styles.bankDataCard}>
+        <View style={styles.bankHeaderRow}>
+          <Ionicons name="business-outline" size={18} color={COLORS.emerald} />
+          <Text style={styles.bankHeaderTitle}>
+            Pago Exclusivo por Transferencia Bancaria
+          </Text>
+        </View>
+        <Text style={styles.bankLine}>
+          • Banco: <Text style={styles.bankBold}>Banco Santander Río</Text>
+        </Text>
+        <Text style={styles.bankLine}>
+          • Titular:{' '}
+          <Text style={[styles.bankBold, { color: COLORS.emerald }]}>
+            Centro Educativo Integral SRL
+          </Text>
+        </Text>
+        <Text style={styles.bankLine}>
+          • CBU: <Text style={styles.bankBold}>0720026720000001289412</Text>
+        </Text>
+        <Text style={styles.bankLine}>
+          • Alias:{' '}
+          <Text style={[styles.bankBold, { color: COLORS.emerald }]}>
+            COLEGIO.CENTRO.PAGOS
+          </Text>
+        </Text>
+      </View>
+
+      {/* Paso 1: Seleccionar los Ítems a Pagar */}
+      <View style={styles.formSectionCard}>
+        <View style={styles.stepHeaderBetween}>
+          <Text style={styles.stepTitle}>1. Seleccione los Ítems a Pagar</Text>
+          <TouchableOpacity onPress={handleSelectAllPending}>
+            <Text style={styles.selectAllLink}>Marcar pendientes</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={{ gap: 8, marginTop: 10 }}>
+          {selectableItems.map((item) => {
+            const checked = effectiveSelectedIds.includes(item.id);
+            return (
+              <TouchableOpacity
+                key={item.id}
+                style={[
+                  styles.checkItemCard,
+                  checked && styles.checkItemCardSelected,
+                ]}
+                onPress={() => toggleItemSelection(item.id)}
+              >
+                <Ionicons
+                  name={checked ? 'checkbox' : 'square-outline'}
+                  size={21}
+                  color={checked ? COLORS.emerald : COLORS.textMuted}
+                />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.checkItemTitle}>{item.label}</Text>
+                  <Text style={styles.checkItemSub}>
+                    {item.studentName} · {item.detail}
+                  </Text>
+                  {item.isPaidOrInReview && (
+                    <Text style={styles.alreadyCoveredTag}>
+                      Ya incluido en comprobante anterior ({item.itemStatus})
+                    </Text>
+                  )}
+                  {item.itemStatus === 'observado' && (
+                    <Text style={styles.observedItemTag}>
+                      Comprobante anterior observado — adjunte respaldo o diferencia
+                    </Text>
+                  )}
+                </View>
+                <Text style={styles.checkItemPrice}>
+                  {formatCurrencyARS(item.amount)}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
+        <View style={styles.selectedSubtotalBar}>
+          <Text style={styles.selectedSubtotalLabel}>
+            Total de Ítems Seleccionados:
+          </Text>
+          <Text style={styles.selectedSubtotalValue}>
+            {formatCurrencyARS(selectedItemsTotal)}
+          </Text>
+        </View>
+      </View>
+
+      {/* Paso 2: Datos de la Transferencia y Archivo en Storage */}
+      <View style={styles.formSectionCard}>
+        <Text style={styles.stepTitle}>
+          2. Datos de la Transferencia y Comprobante
+        </Text>
+
+        <View style={styles.fieldWrap}>
+          <Text style={styles.inputLabel}>
+            Monto Declarado Transferido ($ ARS) *
+          </Text>
+          <TextInput
+            style={styles.textInput}
+            keyboardType="numeric"
+            value={
+              customAmount !== '' ? customAmount : String(selectedItemsTotal)
+            }
+            onChangeText={setCustomAmount}
+            placeholder="Ej: 110000"
+          />
+        </View>
+
+        <View style={styles.fieldWrap}>
+          <Text style={styles.inputLabel}>
+            Código / Nº de Operación Bancaria *
+          </Text>
+          <TextInput
+            style={styles.textInput}
+            value={operationCode}
+            onChangeText={setOperationCode}
+            placeholder="Ej: TRF-9928310"
+            autoCapitalize="characters"
+          />
+        </View>
+
+        <View style={styles.fieldWrap}>
+          <Text style={styles.inputLabel}>Fecha de Transferencia *</Text>
+          <TouchableOpacity
+            style={[
+              styles.transferDateSelectorBtn,
+              isTransferCalendarOpen && styles.calendarFieldBoxActive,
+            ]}
+            onPress={() => setIsTransferCalendarOpen((prev) => !prev)}
+            activeOpacity={0.78}
+          >
+            <View style={styles.calendarFieldValueRow}>
+              <Ionicons
+                name="calendar-outline"
+                size={16}
+                color={
+                  isTransferCalendarOpen ? COLORS.emerald : COLORS.primary
+                }
+              />
+              <Text
+                style={[
+                  styles.calendarFieldValue,
+                  isTransferCalendarOpen && styles.calendarFieldValueActive,
+                ]}
+              >
+                {formatIsoToDisplay(transferDate)}
+              </Text>
+            </View>
+            <Ionicons
+              name={isTransferCalendarOpen ? 'chevron-up' : 'chevron-down'}
+              size={16}
+              color={COLORS.textSecondary}
+            />
+          </TouchableOpacity>
+
+          {isTransferCalendarOpen && (
+            <InlineCalendarPicker
+              mode="single"
+              selectedDate={transferDate}
+              hintText="Seleccione la fecha de transferencia"
+              onSelectDate={(pickedIso) => {
+                setTransferDate(pickedIso);
+                setIsTransferCalendarOpen(false);
+              }}
+            />
+          )}
+        </View>
+
+        <View style={styles.fieldWrap}>
+          <Text style={styles.inputLabel}>Archivo del Comprobante *</Text>
+          <TouchableOpacity
+            style={styles.filePickerBtn}
+            onPress={handlePickVoucherFile}
+          >
+            <Ionicons name="document-attach" size={20} color={COLORS.emerald} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.filePickerTitle}>
+                {pickedFile
+                  ? pickedFile.name
+                  : 'Seleccionar Comprobante Bancario'}
+              </Text>
+              <Text style={styles.filePickerSub}>
+                {pickedFile
+                  ? `Tamaño: ${formatFileSize(pickedFile.size)} · Tipo: ${pickedFile.mimeType}`
+                  : 'Tipo de archivo permitido (.pdf, .png, .jpg, .jpeg — máx. 2 MB)'}
+              </Text>
+            </View>
+          </TouchableOpacity>
+        </View>
+
+        <TouchableOpacity
+          style={[
+            styles.submitVoucherBtn,
+            submittingPayment && { opacity: 0.65 },
+          ]}
+          onPress={handleSubmitVoucher}
+          disabled={submittingPayment}
+        >
+          {submittingPayment ? (
+            <ActivityIndicator size="small" color={COLORS.white} />
+          ) : (
+            <>
+              <Ionicons
+                name="checkmark-done-circle"
+                size={19}
+                color={COLORS.white}
+              />
+              <Text style={styles.submitVoucherBtnText}>
+                Enviar aviso de pago
+              </Text>
+            </>
+          )}
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+
   const renderInvoicesTab = () => {
+    if (selectedInvoiceForDetail && isUploadingForSelectedMonth) {
+      return renderMonthVoucherUploadView();
+    }
+
     if (selectedInvoiceForDetail) {
       return (
         <InvoiceMonthDetailView
           invoice={selectedInvoiceForDetail}
-          onBack={() => setSelectedInvoicePeriod(null)}
+          onBack={() => {
+            setIsUploadingForSelectedMonth(false);
+            setSelectedInvoicePeriod(null);
+          }}
           onPayInvoice={handlePayFromInvoiceDetail}
+          onViewVoucher={handleRequestOpenVoucher}
         />
       );
     }
@@ -1145,7 +1403,10 @@ const BillingScreen = ({
               <InvoiceMonthSummaryCard
                 key={inv.id}
                 invoice={inv}
-                onPress={() => setSelectedInvoicePeriod(inv.period)}
+                onPress={() => {
+                  setIsUploadingForSelectedMonth(false);
+                  setSelectedInvoicePeriod(inv.period);
+                }}
               />
             ))}
           </View>
@@ -1221,14 +1482,13 @@ const BillingScreen = ({
                     },
                   ]}
                 >
-                  {dItem.itemStatus === 'en_revision'
-                    ? 'Comprobante en Revisión'
-                    : 'Pendiente de Transferencia'}
+                  {getDebtItemStatusLabel(dItem.itemStatus)}
                 </Text>
               </View>
             </View>
 
-            {dItem.itemStatus === 'pendiente_pago' && (
+            {(dItem.itemStatus === 'pendiente_pago' ||
+              dItem.itemStatus === 'observado') && (
               <TouchableOpacity
                 style={styles.paySingleItemBtn}
                 onPress={() => handleQuickPayFromDebtItem(dItem)}
@@ -1239,7 +1499,9 @@ const BillingScreen = ({
                   color={COLORS.accent}
                 />
                 <Text style={styles.paySingleItemBtnText}>
-                  Imputar pago de este ítem por transferencia
+                  {dItem.itemStatus === 'observado'
+                    ? 'Añadir documentación o transferencia de respaldo'
+                    : 'Imputar pago de este ítem por transferencia'}
                 </Text>
               </TouchableOpacity>
             )}
@@ -1249,254 +1511,20 @@ const BillingScreen = ({
     </View>
   );
 
-  const renderPayTab = () => (
-    <View style={styles.sectionWrap}>
-      {/* Datos Bancarios Oficiales (Sin efectivo) */}
-      <View style={styles.bankDataCard}>
-        <View style={styles.bankHeaderRow}>
-          <Ionicons name="business-outline" size={18} color={COLORS.emerald} />
-          <Text style={styles.bankHeaderTitle}>
-            Pago Exclusivo por Transferencia Bancaria
-          </Text>
-        </View>
-        <Text style={styles.bankLine}>
-          • Banco: <Text style={styles.bankBold}>Banco Santander Río</Text>
-        </Text>
-        <Text style={styles.bankLine}>
-          • Titular:{' '} <Text style={[styles.bankBold, { color: COLORS.emerald }]}>Centro Educativo Integral SRL</Text>
-        </Text>
-        <Text style={styles.bankLine}>
-          • CBU: <Text style={styles.bankBold}>0720026720000001289412</Text>
-        </Text>
-        <Text style={styles.bankLine}>
-          • Alias:{' '}
-          <Text style={[styles.bankBold, { color: COLORS.emerald }]}>
-            COLEGIO.CENTRO.PAGOS
-          </Text>
-        </Text>
-      </View>
-
-      {/* Paso 1: Elegir Período / Factura */}
-      <View style={styles.formSectionCard}>
-        <Text style={styles.stepTitle}>
-          1. Seleccione el Período de Factura a Imputar
-        </Text>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={{ gap: 8, marginTop: 8 }}
-        >
-          {BILLING_PERIODS_CATALOG.slice(0, 3).map((p) => {
-            const active = targetPeriod === p.label;
-            return (
-              <TouchableOpacity
-                key={p.label}
-                style={[
-                  styles.periodOption,
-                  active && styles.periodOptionActive,
-                ]}
-                onPress={() => {
-                  setTargetPeriod(p.label);
-                  setSelectedItemIds([]);
-                  setCustomAmount('');
-                }}
-              >
-                <Text
-                  style={[
-                    styles.periodOptionText,
-                    active && styles.periodOptionTextActive,
-                  ]}
-                >
-                  {p.label}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
-
-        {activeInvoiceForPayment?.vouchersCount > 0 && (
-          <View style={styles.multiVoucherNotice}>
-            <Ionicons name="layers-outline" size={16} color={COLORS.indigo} />
-            <Text style={styles.multiVoucherNoticeText}>
-              Esta factura ya cuenta con {activeInvoiceForPayment.vouchersCount}{' '}
-              comprobante(s) cargado(s). Puede adjuntar un nuevo comprobante adicional seleccionando los ítems restantes.
-            </Text>
-          </View>
-        )}
-      </View>
-
-      {/* Paso 2: Seleccionar los Ítems a Pagar */}
-      <View style={styles.formSectionCard}>
-        <View style={styles.stepHeaderBetween}>
-          <Text style={styles.stepTitle}>
-            2. Seleccione los Ítems a Pagar
-          </Text>
-          <TouchableOpacity onPress={handleSelectAllPending}>
-            <Text style={styles.selectAllLink}>Marcar pendientes</Text>
-          </TouchableOpacity>
-        </View>
-        
-
-        <View style={{ gap: 8, marginTop: 10 }}>
-          {selectableItems.map((item) => {
-            const checked = effectiveSelectedIds.includes(item.id);
-            return (
-              <TouchableOpacity
-                key={item.id}
-                style={[
-                  styles.checkItemCard,
-                  checked && styles.checkItemCardSelected,
-                ]}
-                onPress={() => toggleItemSelection(item.id)}
-              >
-                <Ionicons
-                  name={checked ? 'checkbox' : 'square-outline'}
-                  size={21}
-                  color={checked ? COLORS.emerald : COLORS.textMuted}
-                />
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.checkItemTitle}>{item.label}</Text>
-                  <Text style={styles.checkItemSub}>
-                    {item.studentName} · {item.detail}
-                  </Text>
-                  {item.isPaidOrInReview && (
-                    <Text style={styles.alreadyCoveredTag}>
-                      Ya incluido en comprobante anterior ({item.itemStatus})
-                    </Text>
-                  )}
-                </View>
-                <Text style={styles.checkItemPrice}>
-                  {formatCurrencyARS(item.amount)}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-
-        <View style={styles.selectedSubtotalBar}>
-          <Text style={styles.selectedSubtotalLabel}>
-            Total de Ítems Seleccionados:
-          </Text>
-          <Text style={styles.selectedSubtotalValue}>
-            {formatCurrencyARS(selectedItemsTotal)}
-          </Text>
-        </View>
-      </View>
-
-      {/* Paso 3: Datos de la Transferencia y Archivo en Storage */}
-      <View style={styles.formSectionCard}>
-        <Text style={styles.stepTitle}>
-          3. Datos de la Transferencia y Comprobante
-        </Text>
-
-        <View style={styles.fieldWrap}>
-          <Text style={styles.inputLabel}>
-            Monto Declarado Transferido ($ ARS) *
-          </Text>
-          <TextInput
-            style={styles.textInput}
-            keyboardType="numeric"
-            value={
-              customAmount !== '' ? customAmount : String(selectedItemsTotal)
-            }
-            onChangeText={setCustomAmount}
-            placeholder="Ej: 110000"
-          />
-        </View>
-
-        <View style={styles.fieldWrap}>
-          <Text style={styles.inputLabel}>
-            Código / Nº de Operación Bancaria *
-          </Text>
-          <TextInput
-            style={styles.textInput}
-            value={operationCode}
-            onChangeText={setOperationCode}
-            placeholder="Ej: TRF-9928310"
-            autoCapitalize="characters"
-          />
-        </View>
-
-        <View style={styles.fieldWrap}>
-          <Text style={styles.inputLabel}>
-            Fecha de Transferencia (AAAA-MM-DD)
-          </Text>
-          <TextInput
-            style={styles.textInput}
-            value={transferDate}
-            onChangeText={setTransferDate}
-            placeholder="2026-11-06"
-          />
-        </View>
-
-        <View style={styles.fieldWrap}>
-          <Text style={styles.inputLabel}>
-            Archivo del Comprobante*
-          </Text>
-          <TouchableOpacity
-            style={styles.filePickerBtn}
-            onPress={handlePickVoucherFile}
-          >
-            <Ionicons name="document-attach" size={20} color={COLORS.emerald} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.filePickerTitle}>
-                {pickedFile
-                  ? pickedFile.name
-                  : 'Seleccionar Comprobante Bancario'}
-              </Text>
-              <Text style={styles.filePickerSub}>
-                {pickedFile
-                  ? `Tamaño: ${formatFileSize(pickedFile.size)} · Tipo: ${pickedFile.mimeType}`
-                  : 'Tipo de archivo permitido (.pdf, .png, .jpg, .jpeg — máx. 2 MB) '}
-              </Text>
-            </View>
-          </TouchableOpacity>
-        </View>
-
-        <TouchableOpacity
-          style={[
-            styles.submitVoucherBtn,
-            submittingPayment && { opacity: 0.65 },
-          ]}
-          onPress={handleSubmitVoucher}
-          disabled={submittingPayment}
-        >
-          {submittingPayment ? (
-            <ActivityIndicator size="small" color={COLORS.white} />
-          ) : (
-            <>
-              <Ionicons
-                name="checkmark-done-circle"
-                size={19}
-                color={COLORS.white}
-              />
-              <Text style={styles.submitVoucherBtnText}>
-                Enviar aviso de pago
-              </Text>
-            </>
-          )}
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
-
-  const showGlobalKpis = !(subTab === 'invoices' && selectedInvoiceForDetail);
+  const showGlobalKpis = !(subTab === 'invoices' && selectedInvoiceForDetail && Number(billingReport?.totalPendingDebt) > 0);
 
   return (
     <View style={styles.container}>
-      {/* Sub-navegación del Módulo 2 */}
+      {/* Sub-navegación del Módulo 2 (Solo Facturas por Mes y Deuda por Ítem) */}
       <View style={styles.subTabsBar}>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.subTabsScroll}
-        >
+        <View style={styles.subTabsRow}>
           <TouchableOpacity
             style={[
               styles.subTabBtn,
               subTab === 'invoices' && styles.subTabBtnActive,
             ]}
             onPress={() => {
+              setIsUploadingForSelectedMonth(false);
               setSelectedInvoicePeriod(null);
               setSubTab('invoices');
             }}
@@ -1519,6 +1547,7 @@ const BillingScreen = ({
           <TouchableOpacity
             style={[styles.subTabBtn, subTab === 'debt' && styles.subTabBtnActive]}
             onPress={() => {
+              setIsUploadingForSelectedMonth(false);
               setSelectedInvoicePeriod(null);
               setSubTab('debt');
             }}
@@ -1537,34 +1566,12 @@ const BillingScreen = ({
               Deuda por Ítem ({billingReport.debtItemsHistory.length})
             </Text>
           </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.subTabBtn, subTab === 'pay' && styles.subTabBtnActive]}
-            onPress={() => {
-              setSelectedInvoicePeriod(null);
-              setSubTab('pay');
-            }}
-          >
-            <Ionicons
-              name="cloud-upload-outline"
-              size={15}
-              color={subTab === 'pay' ? COLORS.white : COLORS.textSecondary}
-            />
-            <Text
-              style={[
-                styles.subTabText,
-                subTab === 'pay' && styles.subTabTextActive,
-              ]}
-            >
-              Seleccionar Ítems y Pagar
-            </Text>
-          </TouchableOpacity>
-        </ScrollView>
+        </View>
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent}>
         {/* Resumen Ejecutivo de Saldos */}
-        {showGlobalKpis && (
+        {(showGlobalKpis && billingReport.totalPendingDebt > 0) && (
           <View style={styles.kpiRow}>
             <View style={[styles.kpiCard, { borderLeftColor: COLORS.rose }]}>
               <Text style={styles.kpiLabel}>DEUDA PENDIENTE</Text>
@@ -1584,14 +1591,11 @@ const BillingScreen = ({
           </View>
         )}
 
-        {/* SUB-TAB 1: FACTURAS Y COMPROBANTES POR MES */}
+        {/* SUB-TAB 1: FACTURAS Y COMPROBANTES POR MES (con detalle y carga de comprobantes del mes) */}
         {subTab === 'invoices' && renderInvoicesTab()}
 
         {/* SUB-TAB 2: HISTORIAL DE DEUDA DISCRIMINADO POR CADA ÍTEM DE PAGO */}
         {subTab === 'debt' && renderDebtTab()}
-
-        {/* SUB-TAB 3: SELECCIONAR ÍTEMS A PAGAR Y CARGAR COMPROBANTE DE TRANSFERENCIA */}
-        {subTab === 'pay' && renderPayTab()}
       </ScrollView>
 
       <DatePeriodFilterModal
@@ -1610,6 +1614,12 @@ const BillingScreen = ({
         receipt={emittedDigitalReceipt}
         onClose={() => setEmittedDigitalReceipt(null)}
       />
+
+      <RedirectVoucherModal
+        visible={Boolean(redirectUrl)}
+        secondsLeft={redirectCountdown}
+        onCancel={handleCancelRedirect}
+      />
     </View>
   );
 };
@@ -1624,17 +1634,20 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: COLORS.border,
     paddingVertical: 10,
-  },
-  subTabsScroll: {
     paddingHorizontal: 14,
-    gap: 8,
+  },
+  subTabsRow: {
+    flexDirection: 'row',
+    gap: 10,
   },
   subTabBtn: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: 6,
     paddingHorizontal: 13,
-    paddingVertical: 8,
+    paddingVertical: 9,
     borderRadius: 10,
     backgroundColor: COLORS.surfaceAlt,
     borderWidth: 1,
@@ -2023,87 +2036,40 @@ const styles = StyleSheet.create({
   calendarFieldValueActive: {
     color: '#065F46',
   },
-  calendarCard: {
-    backgroundColor: COLORS.background,
-    borderRadius: 14,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    gap: 8,
-  },
-  calendarHeader: {
+  transferDateSelectorBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-  },
-  calendarNavBtn: {
-    width: 32,
-    height: 32,
+    backgroundColor: COLORS.background,
     borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: COLORS.borderStrong,
+  },
+  autoPeriodHeaderCard: {
     backgroundColor: COLORS.surface,
+    borderRadius: 12,
+    padding: 14,
     borderWidth: 1,
     borderColor: COLORS.border,
-    alignItems: 'center',
-    justifyContent: 'center',
+    gap: 10,
   },
-  calendarMonthTitle: {
-    fontSize: 13,
+  autoPeriodRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  autoPeriodTitle: {
+    fontSize: 15,
     fontWeight: '800',
     color: COLORS.text,
-  },
-  calendarEditingHint: {
-    fontSize: 10,
-    fontWeight: '600',
-    color: COLORS.emerald,
     marginTop: 1,
   },
-  calendarWeekdaysRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingVertical: 4,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
-  },
-  calendarWeekdayText: {
-    flex: 1,
-    textAlign: 'center',
-    fontSize: 10,
-    fontWeight: '800',
-    color: COLORS.textMuted,
-  },
-  calendarGrid: {
-    gap: 4,
-  },
-  calendarWeekRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  calendarDayCell: {
-    flex: 1,
-    height: 32,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginHorizontal: 1,
-  },
-  calendarDayCellInRange: {
-    backgroundColor: COLORS.emeraldSoft,
-  },
-  calendarDayCellEndpoint: {
-    backgroundColor: COLORS.emerald,
-  },
-  calendarDayText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: COLORS.text,
-  },
-  calendarDayTextInRange: {
-    color: '#065F46',
-    fontWeight: '800',
-  },
-  calendarDayTextEndpoint: {
-    color: COLORS.white,
-    fontWeight: '900',
+  autoPeriodSub: {
+    fontSize: 11,
+    color: COLORS.textSecondary,
+    marginTop: 2,
   },
   modalActionsRow: {
     flexDirection: 'row',
@@ -2316,10 +2282,34 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderRadius: 10,
   },
+  payInvoiceBtnResubmit: {
+    backgroundColor: COLORS.rose,
+  },
   payInvoiceBtnText: {
     fontSize: 13,
     fontWeight: '800',
     color: COLORS.white,
+  },
+  rejectedAlertBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    backgroundColor: COLORS.roseSoft,
+    borderColor: COLORS.roseBorder,
+    borderWidth: 1,
+    padding: 12,
+    borderRadius: 10,
+  },
+  rejectedAlertTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: COLORS.rose,
+  },
+  rejectedAlertText: {
+    fontSize: 11,
+    color: '#9F1239',
+    marginTop: 2,
+    lineHeight: 16,
   },
   debtBanner: {
     flexDirection: 'row',
@@ -2480,26 +2470,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: COLORS.emerald,
   },
-  periodOption: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: COLORS.borderStrong,
-    backgroundColor: COLORS.background,
-  },
-  periodOptionActive: {
-    backgroundColor: COLORS.primary,
-    borderColor: COLORS.primary,
-  },
-  periodOptionText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: COLORS.textSecondary,
-  },
-  periodOptionTextActive: {
-    color: COLORS.white,
-  },
   multiVoucherNotice: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2542,6 +2512,12 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '700',
     color: COLORS.amber,
+    marginTop: 2,
+  },
+  observedItemTag: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: COLORS.rose,
     marginTop: 2,
   },
   checkItemPrice: {
@@ -2622,6 +2598,76 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '800',
     color: COLORS.white,
+  },
+  redirectModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.6)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  redirectModalCard: {
+    width: '100%',
+    maxWidth: 340,
+    backgroundColor: COLORS.surface,
+    borderRadius: 18,
+    padding: 22,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    gap: 12,
+  },
+  redirectIconBox: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: COLORS.emeraldSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  redirectModalTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: COLORS.text,
+    textAlign: 'center',
+  },
+  redirectModalMessage: {
+    fontSize: 13,
+    color: COLORS.textSecondary,
+    textAlign: 'center',
+    lineHeight: 18,
+  },
+  redirectProgressRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: COLORS.surfaceAlt,
+    borderRadius: 10,
+    width: '100%',
+  },
+  redirectCountdownText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: COLORS.emerald,
+  },
+  redirectCancelBtn: {
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: COLORS.borderStrong,
+    backgroundColor: COLORS.background,
+    width: '100%',
+    alignItems: 'center',
+    marginTop: 2,
+  },
+  redirectCancelBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: COLORS.textSecondary,
   },
 });
 

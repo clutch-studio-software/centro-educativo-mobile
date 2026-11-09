@@ -1,10 +1,10 @@
 import {
   collection,
   doc,
-  getDoc,
   getDocs,
   setDoc,
   updateDoc,
+  deleteDoc,
   query,
   where,
   serverTimestamp,
@@ -55,22 +55,49 @@ export const resolveSelectedItems = (bv, matchingReceipt) => {
   return [];
 };
 
-const resolvePreviousVouchers = (existingReceipt) => {
-  if (Array.isArray(existingReceipt?.vouchersHistory)) {
-    return existingReceipt.vouchersHistory;
-  }
-  if (existingReceipt?.bankingVoucher?.isUploadedByTutor) {
-    return [existingReceipt.bankingVoucher];
-  }
-  return [];
+const isVoucherRejectedStatus = (voucherStatus) => {
+  const s = String(voucherStatus || '').toLowerCase();
+  return s.includes('rechaz') || s.includes('observ');
 };
 
-const collectStudentVouchers = (targetStudents, periodLabel, defaultDueDate, vouchersMap) => {
+const resolveVoucherStatusLabel = (rawVoucherStatus, receiptStatus, defaultPendingLabel) => {
+  if (isVoucherRejectedStatus(rawVoucherStatus)) {
+    return rawVoucherStatus;
+  }
+  if (rawVoucherStatus === 'Conciliado OK') {
+    return rawVoucherStatus;
+  }
+  if (receiptStatus === 'aprobado' || receiptStatus === 'conciliado') {
+    return 'Conciliado OK';
+  }
+  if (receiptStatus === 'rechazado') {
+    return 'Observado / Rechazado';
+  }
+  return rawVoucherStatus || defaultPendingLabel;
+};
+
+const resolveStudentVoucherStatus = (svStatus, receiptStatus) => {
+  if (svStatus === 'aprobado' || svStatus === 'conciliado') {
+    return 'Conciliado OK';
+  }
+  if (svStatus === 'rechazado' || svStatus === 'observado' || receiptStatus === 'rechazado') {
+    return 'Observado / Rechazado';
+  }
+  return 'Pendiente de conciliación';
+};
+
+const collectStudentVouchers = (
+  targetStudents,
+  periodLabel,
+  defaultDueDate,
+  receiptStatus,
+  vouchersMap
+) => {
   targetStudents.forEach((st) => {
     const stVouchers = Array.isArray(st.comprobantesPago) ? st.comprobantesPago : [];
     stVouchers.forEach((sv, idx) => {
       if (String(sv.invoicePeriod || '').toLowerCase() === periodLabel.toLowerCase()) {
-        const key = sv.operationCode || sv.id || `sv-${st.id}-${idx}`;
+        const key = sv.id || sv.storagePath || sv.fileUrl || sv.operationCode || `sv-${st.id}-${idx}`;
         if (!vouchersMap.has(key)) {
           vouchersMap.set(key, {
             id: sv.id || key,
@@ -84,10 +111,7 @@ const collectStudentVouchers = (targetStudents, periodLabel, defaultDueDate, vou
             fileSize: sv.fileSize || '',
             fileUrl: sv.fileUrl || '',
             storagePath: sv.storagePath || '',
-            voucherStatus:
-              sv.status === 'aprobado' || sv.status === 'conciliado'
-                ? 'Conciliado OK'
-                : 'Pendiente de conciliación',
+            voucherStatus: resolveStudentVoucherStatus(sv.status, receiptStatus),
           });
         }
       }
@@ -100,27 +124,39 @@ const collectReceiptVouchers = (matchingReceipt, defaultDueDate, vouchersMap) =>
 
   if (Array.isArray(matchingReceipt.vouchersHistory)) {
     matchingReceipt.vouchersHistory.forEach((vh, idx) => {
-      const key = vh.operationCode || vh.id || `vh-${idx}`;
-      vouchersMap.set(key, {
-        id: vh.id || key,
-        operationCode: vh.operationCode || `TRF-${idx + 1}`,
-        originBank: vh.originBank || 'Transferencia Bancaria',
-        operationDate: vh.operationDate || matchingReceipt.uploadDate || defaultDueDate,
-        transferredAmount: Number(vh.transferredAmount || vh.declaredAmount) || 0,
-        selectedItems: Array.isArray(vh.selectedItems) ? vh.selectedItems : [],
-        selectedItemLabels: Array.isArray(vh.selectedItemLabels) ? vh.selectedItemLabels : [],
-        fileName: vh.attachmentName || vh.fileName || 'comprobante.pdf',
-        fileSize: vh.attachmentSize || vh.fileSize || '',
-        fileUrl: vh.fileUrl || vh.downloadUrl || '',
-        storagePath: vh.storagePath || '',
-        voucherStatus: vh.voucherStatus || (matchingReceipt.status === 'aprobado' || matchingReceipt.status === 'conciliado' ? 'Conciliado OK' : 'En revisión'),
-      });
+      const key = vh.id || vh.storagePath || vh.fileUrl || vh.operationCode || `vh-${idx}`;
+      if (!vouchersMap.has(key)) {
+        vouchersMap.set(key, {
+          id: vh.id || key,
+          operationCode: vh.operationCode || `TRF-${idx + 1}`,
+          originBank: vh.originBank || 'Transferencia Bancaria',
+          operationDate: vh.operationDate || matchingReceipt.uploadDate || defaultDueDate,
+          transferredAmount: Number(vh.transferredAmount || vh.declaredAmount) || 0,
+          selectedItems: Array.isArray(vh.selectedItems) ? vh.selectedItems : [],
+          selectedItemLabels: Array.isArray(vh.selectedItemLabels) ? vh.selectedItemLabels : [],
+          fileName: vh.attachmentName || vh.fileName || 'comprobante.pdf',
+          fileSize: vh.attachmentSize || vh.fileSize || '',
+          fileUrl: vh.fileUrl || vh.downloadUrl || '',
+          storagePath: vh.storagePath || '',
+          voucherStatus: resolveVoucherStatusLabel(
+            vh.voucherStatus,
+            matchingReceipt.status,
+            'En revisión'
+          ),
+        });
+      }
     });
   }
 
   if (matchingReceipt.bankingVoucher) {
     const bv = matchingReceipt.bankingVoucher;
-    const key = bv.operationCode || bv.attachmentName || `bv-${matchingReceipt.id}`;
+    const key =
+      bv.id ||
+      bv.storagePath ||
+      bv.fileUrl ||
+      bv.operationCode ||
+      bv.attachmentName ||
+      `bv-${matchingReceipt.id}`;
     if (!vouchersMap.has(key)) {
       vouchersMap.set(key, {
         id: key,
@@ -134,21 +170,121 @@ const collectReceiptVouchers = (matchingReceipt, defaultDueDate, vouchersMap) =>
         fileSize: bv.attachmentSize || '',
         fileUrl: bv.fileUrl || bv.downloadUrl || '',
         storagePath: bv.storagePath || '',
-        voucherStatus:
-          bv.voucherStatus ||
-          (matchingReceipt.status === 'aprobado' || matchingReceipt.status === 'conciliado'
-            ? 'Conciliado OK'
-            : 'Pendiente de conciliación'),
+        voucherStatus: resolveVoucherStatusLabel(
+          bv.voucherStatus,
+          matchingReceipt.status,
+          'Pendiente de conciliación'
+        ),
       });
     }
   }
 };
 
-const collectAssociatedVouchers = (matchingReceipt, targetStudents, periodMeta) => {
+const getReceiptTimestampScore = (r) => {
+  if (r?.updatedAt?.seconds) return r.updatedAt.seconds * 1000;
+  if (typeof r?.updatedAt === 'number') return r.updatedAt;
+  const idMatch = String(r?.id || '').match(/-(\d{10,14})$/);
+  if (idMatch) return Number(idMatch[1]);
+  return 0;
+};
+
+const findMatchingReceiptsForPeriod = (receiptsFromFirestore, periodLabel, studentIdSet) => {
+  const matches = (receiptsFromFirestore || []).filter((r) => {
+    const rMonth = String(r.month || r.invoicePeriod || '').toLowerCase();
+    if (rMonth !== periodLabel.toLowerCase()) return false;
+
+    const rStudentIds = Array.isArray(r.studentIds) ? r.studentIds.map(String) : [];
+    const rChildrenIds = Array.isArray(r.children) ? r.children.map((c) => String(c.id)) : [];
+    return (
+      rStudentIds.some((id) => studentIdSet.has(id)) ||
+      rChildrenIds.some((id) => studentIdSet.has(id))
+    );
+  });
+
+  return matches.sort((a, b) => getReceiptTimestampScore(b) - getReceiptTimestampScore(a));
+};
+
+const collectAssociatedVouchers = (matchingReceipts, targetStudents, periodMeta) => {
   const vouchersMap = new Map();
-  collectReceiptVouchers(matchingReceipt, periodMeta.dueDate, vouchersMap);
-  collectStudentVouchers(targetStudents, periodMeta.label, periodMeta.dueDate, vouchersMap);
+  const primaryStatus = matchingReceipts[0]?.status || null;
+  matchingReceipts.forEach((receipt) => {
+    collectReceiptVouchers(receipt, periodMeta.dueDate, vouchersMap);
+  });
+  collectStudentVouchers(
+    targetStudents,
+    periodMeta.label,
+    periodMeta.dueDate,
+    primaryStatus,
+    vouchersMap
+  );
   return Array.from(vouchersMap.values());
+};
+
+const collectVoucherItemSets = (associatedVouchers) => {
+  const paidItemIdsSet = new Set();
+  const rejectedItemIdsSet = new Set();
+  let validTransferredSum = 0;
+
+  associatedVouchers.forEach((v) => {
+    const isRejected = isVoucherRejectedStatus(v.voucherStatus);
+    const items = Array.isArray(v.selectedItems) ? v.selectedItems : [];
+    if (isRejected) {
+      items.forEach((itemId) => rejectedItemIdsSet.add(itemId));
+      return;
+    }
+    items.forEach((itemId) => paidItemIdsSet.add(itemId));
+    validTransferredSum += Number(v.transferredAmount) || 0;
+  });
+
+  return { paidItemIdsSet, rejectedItemIdsSet, validTransferredSum };
+};
+
+const resolveEnrichedInvoiceItem = ({
+  item,
+  paidItemIdsSet,
+  rejectedItemIdsSet,
+  validTransferredSum,
+  totalInvoiceAmount,
+  isApprovedInFirestore,
+  isRejectedInFirestore,
+  validVouchersCount,
+}) => {
+  const isCoveredBySelection = paidItemIdsSet.has(item.id);
+  const isCoveredByFullTransfer =
+    paidItemIdsSet.size === 0 &&
+    validTransferredSum >= totalInvoiceAmount &&
+    totalInvoiceAmount > 0 &&
+    !isRejectedInFirestore;
+  const isPaidOrInReview = isCoveredBySelection || isCoveredByFullTransfer;
+
+  let itemStatus = 'pendiente_pago'; // 'conciliado' | 'en_revision' | 'observado' | 'pendiente_pago'
+  if (isApprovedInFirestore && isPaidOrInReview) {
+    itemStatus = 'conciliado';
+  } else if (isPaidOrInReview && validVouchersCount > 0) {
+    itemStatus = 'en_revision';
+  } else if (isRejectedInFirestore || rejectedItemIdsSet.has(item.id)) {
+    itemStatus = 'observado';
+  }
+
+  return {
+    ...item,
+    itemStatus,
+    isPaidOrInReview,
+    pendingAmount: isPaidOrInReview ? 0 : item.amount,
+  };
+};
+
+const normalizePreviousHistoryForResubmission = (prevHistory, wasReceiptRejected) => {
+  if (!wasReceiptRejected) return prevHistory;
+  return prevHistory.map((vh) => {
+    if (vh.voucherStatus === 'Conciliado OK' || isVoucherRejectedStatus(vh.voucherStatus)) {
+      return vh;
+    }
+    return {
+      ...vh,
+      voucherStatus: 'Observado en envío anterior',
+    };
+  });
 };
 
 const resolveInvoiceStatus = (matchingReceipt, isApprovedInFirestore, pendingBalance, coveredAmount, associatedVouchersCount) => {
@@ -167,19 +303,19 @@ const resolveInvoiceStatus = (matchingReceipt, isApprovedInFirestore, pendingBal
   if (associatedVouchersCount > 0 && pendingBalance > 0 && coveredAmount > 0) {
     return {
       status: 'pago_parcial',
-      statusLabel: `Pago Parcial (${associatedVouchersCount} comp.) · Resta saldo`,
+      statusLabel: `Pago Parcial`,
     };
   }
   if (associatedVouchersCount > 0 && pendingBalance === 0) {
     return {
       status: 'pendiente',
-      statusLabel: 'En Revisión / Pendiente de Conciliación',
+      statusLabel: 'En Revisión',
     };
   }
   if (associatedVouchersCount > 0) {
     return {
       status: 'pendiente',
-      statusLabel: 'En Revisión Administrativa',
+      statusLabel: 'En Revisión',
     };
   }
   return {
@@ -458,21 +594,16 @@ export const buildBillingInvoicesAndDebtReport = ({
       : students;
 
   const invoices = BILLING_PERIODS_CATALOG.map((periodMeta) => {
-    // Buscar si existe documento en finance_receipts para este período y familia/alumno
+    // Buscar si existen documentos en finance_receipts para este período y familia/alumno
     const studentIdSet = new Set(targetStudents.map((s) => String(s.id)));
-
-    const matchingReceipt = (receiptsFromFirestore || []).find((r) => {
-      const rMonth = String(r.month || r.invoicePeriod || '').toLowerCase();
-      if (rMonth !== periodMeta.label.toLowerCase()) return false;
-
-      const rStudentIds = Array.isArray(r.studentIds) ? r.studentIds.map(String) : [];
-      const rChildrenIds = Array.isArray(r.children) ? r.children.map((c) => String(c.id)) : [];
-      const hasAnyTargetStudent =
-        rStudentIds.some((id) => studentIdSet.has(id)) ||
-        rChildrenIds.some((id) => studentIdSet.has(id));
-
-      return hasAnyTargetStudent;
-    });
+    const matchingReceipts = findMatchingReceiptsForPeriod(
+      receiptsFromFirestore,
+      periodMeta.label,
+      studentIdSet
+    );
+    const matchingReceipt = matchingReceipts[0] || null;
+    const rejectionReasonFromHistory =
+      matchingReceipts.find((r) => r.rejectionReason)?.rejectionReason || null;
 
     // Calcular desglose de ítems por cada alumno objetivo
     const refDate = new Date(`${periodMeta.isoStart}T12:00:00`);
@@ -497,49 +628,40 @@ export const buildBillingInvoicesAndDebtReport = ({
     const totalInvoiceAmount = allItems.reduce((sum, i) => sum + i.amount, 0);
 
     // Recopilar todos los comprobantes asociados a esta factura
-    const associatedVouchers = collectAssociatedVouchers(matchingReceipt, targetStudents, periodMeta);
-
-    // Determinar ítems abonados y estado de la cuota
-    const paidItemIdsSet = new Set();
-    associatedVouchers.forEach((v) => {
-      if (Array.isArray(v.selectedItems) && v.selectedItems.length > 0) {
-        v.selectedItems.forEach((itemId) => paidItemIdsSet.add(itemId));
-      }
-    });
+    const associatedVouchers = collectAssociatedVouchers(
+      matchingReceipts,
+      targetStudents,
+      periodMeta
+    );
 
     const isApprovedInFirestore =
       matchingReceipt?.status === 'aprobado' || matchingReceipt?.status === 'conciliado';
+    const isRejectedInFirestore = matchingReceipt?.status === 'rechazado';
 
-    const totalTransferred = associatedVouchers.reduce(
-      (sum, v) => sum + (Number(v.transferredAmount) || 0),
-      0
-    );
+    const { paidItemIdsSet, rejectedItemIdsSet, validTransferredSum } =
+      collectVoucherItemSets(associatedVouchers);
+
+    const validVouchersCount = associatedVouchers.filter(
+      (v) => !isVoucherRejectedStatus(v.voucherStatus)
+    ).length;
 
     // Si en Firestore figura aprobado/conciliado para un mes pasado y cubre el monto, todos los ítems están pagados
     if (isApprovedInFirestore && paidItemIdsSet.size === 0) {
       allItems.forEach((item) => paidItemIdsSet.add(item.id));
     }
 
-    const enrichedItems = allItems.map((item) => {
-      const isCoveredBySelection = paidItemIdsSet.has(item.id);
-      const isCoveredByFullTransfer =
-        paidItemIdsSet.size === 0 && totalTransferred >= totalInvoiceAmount && totalInvoiceAmount > 0;
-      const isPaidOrInReview = isCoveredBySelection || isCoveredByFullTransfer;
-
-      let itemStatus = 'pendiente_pago'; // 'conciliado' | 'en_revision' | 'pendiente_pago'
-      if (isApprovedInFirestore && isPaidOrInReview) {
-        itemStatus = 'conciliado';
-      } else if (isPaidOrInReview && associatedVouchers.length > 0) {
-        itemStatus = 'en_revision';
-      }
-
-      return {
-        ...item,
-        itemStatus,
-        isPaidOrInReview,
-        pendingAmount: isPaidOrInReview ? 0 : item.amount,
-      };
-    });
+    const enrichedItems = allItems.map((item) =>
+      resolveEnrichedInvoiceItem({
+        item,
+        paidItemIdsSet,
+        rejectedItemIdsSet,
+        validTransferredSum,
+        totalInvoiceAmount,
+        isApprovedInFirestore,
+        isRejectedInFirestore,
+        validVouchersCount,
+      })
+    );
 
     const pendingItems = enrichedItems.filter((i) => !i.isPaidOrInReview);
     const pendingBalance = pendingItems.reduce((sum, i) => sum + i.amount, 0);
@@ -550,7 +672,7 @@ export const buildBillingInvoicesAndDebtReport = ({
       isApprovedInFirestore,
       pendingBalance,
       coveredAmount,
-      associatedVouchers.length
+      validVouchersCount
     );
 
     return {
@@ -562,7 +684,7 @@ export const buildBillingInvoicesAndDebtReport = ({
       status,
       statusLabel,
       receiptNumber: matchingReceipt?.receiptNumber || null,
-      rejectionReason: matchingReceipt?.rejectionReason || null,
+      rejectionReason: matchingReceipt?.rejectionReason || rejectionReasonFromHistory,
       totalAmount: totalInvoiceAmount,
       coveredAmount,
       pendingBalance,
@@ -595,7 +717,7 @@ export const buildBillingInvoicesAndDebtReport = ({
   );
 
   const totalPendingDebt = debtItemsHistory
-    .filter((i) => i.itemStatus === 'pendiente_pago')
+    .filter((i) => i.itemStatus === 'pendiente_pago' || i.itemStatus === 'observado')
     .reduce((sum, i) => sum + i.amount, 0);
 
   const totalInReviewAmount = debtItemsHistory
@@ -609,6 +731,357 @@ export const buildBillingInvoicesAndDebtReport = ({
     totalPendingDebt,
     totalInReviewAmount,
   };
+};
+
+const extractInitials = (fullName, fallback = 'AL') => {
+  const parts = String(fullName || '')
+    .split(' ')
+    .filter(Boolean);
+  if (parts.length === 0) return fallback;
+  return parts
+    .map((w) => w[0])
+    .slice(0, 2)
+    .join('')
+    .toUpperCase();
+};
+
+const resolveReferenceDateForPeriod = (invoicePeriod) => {
+  const matched = BILLING_PERIODS_CATALOG.find(
+    (p) => p.label.toLowerCase() === String(invoicePeriod || '').toLowerCase()
+  );
+  if (matched?.isoStart) {
+    return new Date(`${matched.isoStart}T12:00:00`);
+  }
+  return new Date();
+};
+
+/**
+ * Construye el array `children` con el desglose de aranceles (`feeBreakdown`) compatible
+ * con el panel de administración web (`FinanceReceiptAccordionPanel` y `FinanceChildCard`).
+ */
+export const buildReceiptChildrenBreakdown = ({
+  linkedStudents = [],
+  tariffsConfig = null,
+  allDisciplines = INITIAL_DISCIPLINES,
+  invoicePeriod = 'Noviembre 2026',
+  existingChildren = [],
+}) => {
+  if (!Array.isArray(linkedStudents) || linkedStudents.length === 0) {
+    return Array.isArray(existingChildren) ? existingChildren : [];
+  }
+
+  const refDate = resolveReferenceDateForPeriod(invoicePeriod);
+  const existingById = new Map(
+    (Array.isArray(existingChildren) ? existingChildren : []).map((ch) => [String(ch.id), ch])
+  );
+
+  return linkedStudents.map((st, idx) => {
+    const prevChild = existingById.get(String(st.id)) || null;
+    const calc = calculateStudentItemizedFees({
+      student: st,
+      tariffsConfig,
+      allDisciplines,
+      referenceDate: refDate,
+    });
+
+    const childName =
+      st.nombreCompleto || `${st.nombre || ''} ${st.apellido || ''}`.trim() || 'Estudiante';
+    const childLegajo =
+      st.studentID_login ||
+      st.legajo ||
+      prevChild?.legajo ||
+      `Leg. #EST-${String(idx + 1).padStart(4, '0')}`;
+    const childCurso = st.cursoDisplay || `${st.curso || '1° Año'} ${st.division || 'A'}`.trim();
+
+    const feeBreakdown = calc.items.map((item) => ({
+      id: item.id,
+      label: item.label,
+      amount: item.amount,
+      dotClass: item.category === 'deporte' ? 'bg-secondary' : 'bg-primary',
+    }));
+
+    return {
+      id: st.id,
+      name: childName,
+      initials: prevChild?.initials || extractInitials(childName, 'AL'),
+      avatarBg: prevChild?.avatarBg || 'bg-primary/10 text-primary',
+      legajo: childLegajo,
+      academicInfo: prevChild?.academicInfo || `${childCurso} · Turno Mañana`,
+      totalAmount: calc.totalAmount,
+      discountNotice: prevChild?.discountNotice || null,
+      feeBreakdown,
+    };
+  });
+};
+
+const isReceiptMatchingFamily = (docData, effectiveUid, cleanTutorDni, studentIdsSet) => {
+  if (!docData) return false;
+  if (effectiveUid && (docData.tutorUid === effectiveUid || docData.parentId === effectiveUid)) {
+    return true;
+  }
+  if (cleanTutorDni && cleanDni(docData.tutorDni) === cleanTutorDni) {
+    return true;
+  }
+  const docStudentIds = Array.isArray(docData.studentIds) ? docData.studentIds.map(String) : [];
+  const docChildrenIds = Array.isArray(docData.children)
+    ? docData.children.map((ch) => String(ch.id))
+    : [];
+  return (
+    docStudentIds.some((cid) => studentIdsSet.has(cid)) ||
+    docChildrenIds.some((cid) => studentIdsSet.has(cid))
+  );
+};
+
+const scoreCanonicalReceiptCandidate = (docItem) => {
+  let score = 0;
+  const docId = String(docItem?.id || '');
+  if (!/-\d{10,14}$/.test(docId)) {
+    score += 100;
+  }
+  if (Array.isArray(docItem?.children) && docItem.children.length > 0) {
+    score += 60;
+  }
+  if (!docItem?.parentReceiptId) {
+    score += 30;
+  }
+  return score;
+};
+
+const extractTutorVouchersFromReceipt = (receipt) => {
+  if (!receipt) return [];
+  if (Array.isArray(receipt.vouchersHistory) && receipt.vouchersHistory.length > 0) {
+    return receipt.vouchersHistory;
+  }
+  if (
+    receipt.bankingVoucher &&
+    (receipt.bankingVoucher.isUploadedByTutor ||
+      receipt.bankingVoucher.downloadUrl ||
+      receipt.bankingVoucher.fileUrl)
+  ) {
+    return [receipt.bankingVoucher];
+  }
+  return [];
+};
+
+const mergeUniqueVouchersList = (vouchersArrays) => {
+  const seen = new Map();
+  vouchersArrays.flat().forEach((v) => {
+    if (!v) return;
+    const key = String(
+      v.id || v.storagePath || v.fileUrl || v.operationCode || v.attachmentName || ''
+    ).trim();
+    if (!key) return;
+    if (!seen.has(key)) {
+      seen.set(key, v);
+    }
+  });
+  return Array.from(seen.values());
+};
+
+const resolveFamilyCodeFromReceipts = ({
+  tutorUser,
+  effectiveUid,
+  cleanTutorDni,
+  candidateReceipts = [],
+}) => {
+  if (tutorUser?.familyCode) return tutorUser.familyCode;
+  const uidSuffix = String(effectiveUid || '').slice(-4).toUpperCase();
+  const preferredUidCode = uidSuffix ? `#FAM-${uidSuffix}` : null;
+  if (preferredUidCode && candidateReceipts.some((r) => r?.familyCode === preferredUidCode)) {
+    return preferredUidCode;
+  }
+
+  const withChildren = candidateReceipts.find(
+    (r) => r?.familyCode && Array.isArray(r.children) && r.children.length > 0
+  );
+  if (withChildren?.familyCode) return withChildren.familyCode;
+
+  const anyWithCode = candidateReceipts.find((r) => Boolean(r?.familyCode));
+  if (anyWithCode?.familyCode) return anyWithCode.familyCode;
+
+  const suffix = (effectiveUid || cleanTutorDni || '0001').slice(-4).toUpperCase();
+  return `#FAM-${suffix}`;
+};
+
+const findFamilyReceiptsForMonth = async ({
+  invoicePeriod,
+  effectiveUid,
+  cleanTutorDni,
+  studentIdsSet,
+  existingReceiptsPool = [],
+}) => {
+  const byId = new Map();
+
+  (existingReceiptsPool || []).forEach((r) => {
+    const rMonth = String(r?.month || r?.invoicePeriod || '').toLowerCase();
+    if (
+      r?.id &&
+      rMonth === invoicePeriod.toLowerCase() &&
+      isReceiptMatchingFamily(r, effectiveUid, cleanTutorDni, studentIdsSet)
+    ) {
+      byId.set(r.id, r);
+    }
+  });
+
+  try {
+    const qMonth = query(collection(db, 'finance_receipts'), where('month', '==', invoicePeriod));
+    const snap = await getDocs(qMonth);
+    snap.forEach((dSnap) => {
+      const d = { id: dSnap.id, ...dSnap.data() };
+      if (isReceiptMatchingFamily(d, effectiveUid, cleanTutorDni, studentIdsSet)) {
+        byId.set(dSnap.id, d);
+      }
+    });
+  } catch (err) {
+    console.warn('Aviso consultando recibos del período en finance_receipts:', err?.message);
+  }
+
+  const matches = Array.from(byId.values());
+  matches.sort((a, b) => scoreCanonicalReceiptCandidate(b) - scoreCanonicalReceiptCandidate(a));
+  return matches;
+};
+
+const cleanupDuplicateReceipts = async (duplicateReceipts = []) => {
+  await Promise.all(
+    duplicateReceipts.map(async (dup) => {
+      if (!dup?.id) return;
+      try {
+        await deleteDoc(doc(db, 'finance_receipts', dup.id));
+      } catch (_err) {
+        // Ignorar si no tiene permiso de borrado en algún entorno
+      }
+    })
+  );
+};
+
+const reconcileSingleMonthGroup = async ({
+  monthLabel,
+  monthDocs,
+  effectiveUid,
+  canonicalFamilyCode,
+  linkedStudents,
+  tariffsConfig,
+  allDisciplines,
+}) => {
+  monthDocs.sort((a, b) => scoreCanonicalReceiptCandidate(b) - scoreCanonicalReceiptCandidate(a));
+  const primary = monthDocs[0];
+  const duplicates = monthDocs.slice(1);
+  const missingChildren =
+    !Array.isArray(primary.children) || primary.children.length < linkedStudents.length;
+  const wrongFamilyCode = primary.familyCode !== canonicalFamilyCode;
+
+  if (duplicates.length === 0 && !missingChildren && !wrongFamilyCode) {
+    return;
+  }
+
+  const docsByRecency = [...monthDocs].sort(
+    (a, b) => getReceiptTimestampScore(b) - getReceiptTimestampScore(a)
+  );
+  const mergedVouchers = mergeUniqueVouchersList(
+    docsByRecency.map((d) => extractTutorVouchersFromReceipt(d))
+  );
+  const childrenBreakdown = buildReceiptChildrenBreakdown({
+    linkedStudents,
+    tariffsConfig,
+    allDisciplines,
+    invoicePeriod: monthLabel,
+    existingChildren: primary.children,
+  });
+
+  const latestDocWithVouchers =
+    docsByRecency.find((d) => extractTutorVouchersFromReceipt(d).length > 0) || primary;
+
+  const sumVouchers = mergedVouchers.reduce(
+    (sum, v) => sum + (Number(v.transferredAmount || v.declaredAmount || v.amount) || 0),
+    0
+  );
+  const childrenSum = childrenBreakdown.reduce((sum, c) => sum + (Number(c.totalAmount) || 0), 0);
+  const resolvedStatus = latestDocWithVouchers.status || primary.status || 'pendiente';
+  const resolvedRejection =
+    resolvedStatus === 'rechazado'
+      ? latestDocWithVouchers.rejectionReason || primary.rejectionReason || null
+      : null;
+
+  const consolidatedPayload = {
+    ...primary,
+    id: primary.id,
+    familyCode: canonicalFamilyCode,
+    tutorUid: effectiveUid,
+    parentId: effectiveUid,
+    studentIds: linkedStudents.map((s) => s.id),
+    children: childrenBreakdown,
+    childrenCount: childrenBreakdown.length,
+    enrolledChildrenCount: childrenBreakdown.length,
+    status: resolvedStatus,
+    receiptNumber:
+      monthDocs.find((d) => Boolean(d.receiptNumber))?.receiptNumber ||
+      primary.receiptNumber ||
+      null,
+    rejectionReason: resolvedRejection,
+    declaredAmount: sumVouchers > 0 ? sumVouchers : childrenSum,
+    bankingVoucher: mergedVouchers[0] || primary.bankingVoucher || null,
+    vouchersHistory: mergedVouchers,
+    updatedAt: serverTimestamp(),
+  };
+
+  try {
+    await setDoc(doc(db, 'finance_receipts', primary.id), consolidatedPayload, { merge: true });
+    if (duplicates.length > 0) {
+      await cleanupDuplicateReceipts(duplicates);
+    }
+  } catch (_err) {
+    // Continuar silenciosamente
+  }
+};
+
+/**
+ * Reconcilia y consolida en segundo plano documentos duplicados o sin array `children`
+ * en `finance_receipts` para la familia autenticada, unificando `familyCode`, `children` y `vouchersHistory`.
+ */
+export const reconcileFamilyReceiptsInFirestore = async ({
+  tutorUser,
+  linkedStudents = [],
+  financeReceipts = [],
+  tariffsConfig = null,
+  allDisciplines = INITIAL_DISCIPLINES,
+}) => {
+  const effectiveUid = auth.currentUser?.uid || tutorUser?.uid || tutorUser?.id;
+  if (!effectiveUid || !Array.isArray(linkedStudents) || linkedStudents.length === 0) return;
+
+  const cleanTutorDni = cleanDni(tutorUser?.dni || '');
+  const studentIdsSet = new Set(linkedStudents.map((s) => String(s.id)));
+
+  const familyReceipts = (financeReceipts || []).filter((r) =>
+    isReceiptMatchingFamily(r, effectiveUid, cleanTutorDni, studentIdsSet)
+  );
+  if (familyReceipts.length === 0) return;
+
+  const canonicalFamilyCode = resolveFamilyCodeFromReceipts({
+    tutorUser,
+    effectiveUid,
+    cleanTutorDni,
+    candidateReceipts: familyReceipts,
+  });
+
+  const byMonth = new Map();
+  familyReceipts.forEach((r) => {
+    const m = r.month || r.invoicePeriod;
+    if (!m) return;
+    if (!byMonth.has(m)) byMonth.set(m, []);
+    byMonth.get(m).push(r);
+  });
+
+  for (const [monthLabel, monthDocs] of byMonth.entries()) {
+    await reconcileSingleMonthGroup({
+      monthLabel,
+      monthDocs,
+      effectiveUid,
+      canonicalFamilyCode,
+      linkedStudents,
+      tariffsConfig,
+      allDisciplines,
+    });
+  }
 };
 
 /**
@@ -627,6 +1100,9 @@ export const submitTransferVoucherWithItems = async ({
   originBank,
   transferDate,
   fileAsset,
+  tariffsConfig = null,
+  allDisciplines = INITIAL_DISCIPLINES,
+  existingReceiptsPool = [],
 }) => {
   if (!Array.isArray(selectedItems) || selectedItems.length === 0) {
     throw new Error('Debe seleccionar al menos un ítem de la factura para imputar el pago.');
@@ -646,8 +1122,32 @@ export const submitTransferVoucherWithItems = async ({
   }
 
   const cleanTutorDni = cleanDni(tutorUser?.dni || '');
-  const familySuffix = (cleanTutorDni || effectiveUid || '0001').slice(-4).toUpperCase();
-  const familyCode = `#FAM-${familySuffix}`;
+  const studentIdsSet = new Set(linkedStudents.map((s) => String(s.id)));
+
+  // 1. Buscar recibos existentes del período para reutilizar siempre el recibo canónico y el familyCode oficial
+  const monthMatches = await findFamilyReceiptsForMonth({
+    invoicePeriod,
+    effectiveUid,
+    cleanTutorDni,
+    studentIdsSet,
+    existingReceiptsPool,
+  });
+
+  const existingReceipt = monthMatches[0] || null;
+  const duplicateReceipts = monthMatches.slice(1);
+
+  const allFamilyReceipts = (existingReceiptsPool || []).filter((r) =>
+    isReceiptMatchingFamily(r, effectiveUid, cleanTutorDni, studentIdsSet)
+  );
+  const familyCode = resolveFamilyCodeFromReceipts({
+    tutorUser,
+    effectiveUid,
+    cleanTutorDni,
+    candidateReceipts: [...monthMatches, ...allFamilyReceipts],
+  });
+
+  const deterministicDocId = `rec-${slugify(familyCode)}-${slugify(invoicePeriod)}`;
+  const targetReceiptId = existingReceipt?.id || deterministicDocId;
 
   const selectedItemIds = selectedItems.map((i) => i.id);
   const selectedItemLabels = selectedItems.map((i) => `${i.label} (${i.studentName})`);
@@ -662,7 +1162,7 @@ export const submitTransferVoucherWithItems = async ({
   const calculatedSelectionSum = selectedItems.reduce((sum, i) => sum + (Number(i.amount) || 0), 0);
   const finalAmount = Number(declaredAmount) > 0 ? Number(declaredAmount) : calculatedSelectionSum;
 
-  // 1. Subir archivo a Firebase Storage en vouchers/{uid}/{timestamp}_{fileName}
+  // 2. Subir archivo a Firebase Storage en vouchers/{uid}/{timestamp}_{fileName}
   const uploadedStorage = await uploadFileToFirebaseStorage({
     fileAsset,
     folder: 'vouchers',
@@ -714,36 +1214,14 @@ export const submitTransferVoucherWithItems = async ({
     invoicePeriod,
   };
 
-  // 2. Buscar si ya existe el recibo mensual en finance_receipts
-  const deterministicDocId = `rec-${slugify(familyCode)}-${slugify(invoicePeriod)}`;
-  let targetReceiptId = deterministicDocId;
-  let existingReceipt = null;
-
-  try {
-    const directSnap = await getDoc(doc(db, 'finance_receipts', deterministicDocId));
-    if (directSnap.exists()) {
-      existingReceipt = directSnap.data();
-    } else {
-      const qMonth = query(collection(db, 'finance_receipts'), where('month', '==', invoicePeriod));
-      const snap = await getDocs(qMonth);
-      const studentIdsSet = new Set(linkedStudents.map((s) => String(s.id)));
-      snap.forEach((dSnap) => {
-        const d = dSnap.data();
-        const matchesUid = d.tutorUid === effectiveUid || d.parentId === effectiveUid;
-        const matchesDni = cleanTutorDni && cleanDni(d.tutorDni) === cleanTutorDni;
-        const docChildrenIds = Array.isArray(d.children) ? d.children.map((ch) => String(ch.id)) : [];
-        const matchesChild = docChildrenIds.some((cid) => studentIdsSet.has(cid));
-        if (matchesUid || matchesDni || matchesChild) {
-          targetReceiptId = dSnap.id;
-          existingReceipt = d;
-        }
-      });
-    }
-  } catch (err) {
-    console.warn('Aviso consultando recibo previo en finance_receipts:', err?.message);
-  }
-
-  const prevHistory = resolvePreviousVouchers(existingReceipt);
+  const wasReceiptRejected = existingReceipt?.status === 'rechazado';
+  const allPrevVouchers = mergeUniqueVouchersList(
+    monthMatches.map((m) => extractTutorVouchersFromReceipt(m))
+  );
+  const prevHistory = normalizePreviousHistoryForResubmission(
+    allPrevVouchers,
+    wasReceiptRejected
+  );
 
   const nextVouchersHistory = [voucherEntry, ...prevHistory];
   const prevSelectedItems = Array.isArray(existingReceipt?.selectedItems)
@@ -751,31 +1229,33 @@ export const submitTransferVoucherWithItems = async ({
     : [];
   const mergedSelectedItems = Array.from(new Set([...prevSelectedItems, ...selectedItemIds]));
 
-  const cumulativeTransferred = nextVouchersHistory.reduce(
-    (sum, v) => sum + (Number(v.transferredAmount || v.declaredAmount) || 0),
-    0
-  );
+  const cumulativeTransferred = nextVouchersHistory
+    .filter((v) => !isVoucherRejectedStatus(v.voucherStatus))
+    .reduce((sum, v) => sum + (Number(v.transferredAmount || v.declaredAmount) || 0), 0);
 
-  const initials =
-    tutorDisplayName
-      .split(' ')
-      .filter(Boolean)
-      .map((w) => w[0])
-      .slice(0, 2)
-      .join('')
-      .toUpperCase() || 'TF';
+  const initials = extractInitials(tutorDisplayName, 'TF');
+  const childrenBreakdown = buildReceiptChildrenBreakdown({
+    linkedStudents,
+    tariffsConfig,
+    allDisciplines,
+    invoicePeriod,
+    existingChildren: existingReceipt?.children,
+  });
 
   const receiptPayload = {
     ...(existingReceipt || {}),
     id: targetReceiptId,
-    familyCode: existingReceipt?.familyCode || familyCode,
+    familyCode,
     tutor: existingReceipt?.tutor || tutorDisplayName,
     tutorDni: existingReceipt?.tutorDni || tutorUser?.dni || '',
     tutorUid: effectiveUid,
     parentId: effectiveUid,
     studentIds: linkedStudents.map((s) => s.id),
     initials: existingReceipt?.initials || initials,
-    status: 'pendiente', // Necesario 'pendiente' según firestore.rules para permitir updates posteriores del tutor
+    avatarBg:
+      existingReceipt?.avatarBg || 'bg-surface-container-high text-on-surface-variant',
+    status: 'pendiente',
+    rejectionReason: null,
     uploadDate: uploadDateFormatted,
     uploadTime: uploadTimeFormatted,
     declaredAmount: cumulativeTransferred,
@@ -785,23 +1265,16 @@ export const submitTransferVoucherWithItems = async ({
     conceptSummary: selectedItems.map((i) => i.label).join(' + '),
     bankingVoucher: voucherEntry,
     vouchersHistory: nextVouchersHistory,
-    enrolledChildrenCount: linkedStudents.length || 1,
+    children: childrenBreakdown,
+    childrenCount: childrenBreakdown.length,
+    enrolledChildrenCount: childrenBreakdown.length || linkedStudents.length || 1,
     updatedAt: serverTimestamp(),
   };
 
-  try {
-    await setDoc(doc(db, 'finance_receipts', targetReceiptId), receiptPayload, { merge: true });
-  } catch (setDocErr) {
-    if (setDocErr) {
-      // Si existingReceipt tenía status != 'pendiente' y firestore.rules bloqueó el update sobre ese docId,
-      // creamos un documento complementario determinístico para este envío
-      const fallbackDocId = `${targetReceiptId}-${Date.now()}`;
-      await setDoc(doc(db, 'finance_receipts', fallbackDocId), {
-        ...receiptPayload,
-        id: fallbackDocId,
-        parentReceiptId: targetReceiptId,
-      });
-    }
+  await setDoc(doc(db, 'finance_receipts', targetReceiptId), receiptPayload, { merge: true });
+
+  if (duplicateReceipts.length > 0) {
+    await cleanupDuplicateReceipts(duplicateReceipts);
   }
 
   // 3. Guardar en el array comprobantesPago de cada alumno involucrado (soportando múltiples comprobantes por período)
@@ -833,7 +1306,18 @@ export const submitTransferVoucherWithItems = async ({
         status: 'pendiente',
       };
 
-      const nextStudentVouchers = [childVoucherRecord, ...prevVouchers];
+      const normalizedPrevStudentVouchers = prevVouchers.map((pv) => {
+        if (
+          wasReceiptRejected &&
+          String(pv.invoicePeriod || '').toLowerCase() === invoicePeriod.toLowerCase() &&
+          pv.status === 'pendiente'
+        ) {
+          return { ...pv, status: 'rechazado' };
+        }
+        return pv;
+      });
+
+      const nextStudentVouchers = [childVoucherRecord, ...normalizedPrevStudentVouchers];
       await updateDoc(doc(db, 'students', student.id), {
         comprobantesPago: nextStudentVouchers,
         updatedAt: serverTimestamp(),
