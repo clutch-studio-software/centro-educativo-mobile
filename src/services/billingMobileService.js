@@ -71,7 +71,7 @@ const resolveVoucherStatusLabel = (rawVoucherStatus, receiptStatus, defaultPendi
     return 'Conciliado OK';
   }
   if (receiptStatus === 'rechazado') {
-    return 'Observado / Rechazado';
+    return 'Rechazado';
   }
   return rawVoucherStatus || defaultPendingLabel;
 };
@@ -81,7 +81,7 @@ const resolveStudentVoucherStatus = (svStatus, receiptStatus) => {
     return 'Conciliado OK';
   }
   if (svStatus === 'rechazado' || svStatus === 'observado' || receiptStatus === 'rechazado') {
-    return 'Observado / Rechazado';
+    return 'Rechazado';
   }
   return 'Pendiente de conciliación';
 };
@@ -291,13 +291,13 @@ const resolveInvoiceStatus = (matchingReceipt, isApprovedInFirestore, pendingBal
   if (matchingReceipt?.status === 'rechazado') {
     return {
       status: 'rechazado',
-      statusLabel: 'Comprobante Observado / Rechazado',
+      statusLabel: 'Rechazado',
     };
   }
   if (isApprovedInFirestore && pendingBalance === 0) {
     return {
       status: 'conciliado',
-      statusLabel: 'Pagado y Conciliado',
+      statusLabel: 'Aprobado',
     };
   }
   if (associatedVouchersCount > 0 && pendingBalance > 0 && coveredAmount > 0) {
@@ -320,7 +320,7 @@ const resolveInvoiceStatus = (matchingReceipt, isApprovedInFirestore, pendingBal
   }
   return {
     status: 'sin_comprobante',
-    statusLabel: 'Pendiente de Pago',
+    statusLabel: 'Pendiente',
   };
 };
 

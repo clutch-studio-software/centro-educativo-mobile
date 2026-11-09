@@ -102,7 +102,7 @@ const getDebtItemStatusLabel = (itemStatus) => {
 
 const resolvePrimaryPayButtonLabel = (invoice) => {
   if (invoice.status === 'rechazado') {
-    return 'Añadir documentación / comprobante de respaldo';
+    return 'Enviar comprobante';
   }
   if (invoice.pendingBalance > 0) {
     return 'Enviar comprobante de transferencia';
@@ -462,7 +462,14 @@ const InvoiceMonthSummaryCard = ({ invoice, onPress }) => {
       <View style={styles.monthCardTopRow}>
         <View style={{ flex: 1 }}>
           <Text style={styles.monthCardTitle}>{invoice.period}</Text>
-          <View style={styles.monthDueRow}>
+          
+        </View>
+        <InvoiceStatusBadge
+          status={invoice.status}
+          statusLabel={invoice.statusLabel}
+        />
+      </View>
+      <View style={styles.monthDueRow}>
             <Ionicons
               name="calendar-clear-outline"
               size={13}
@@ -472,12 +479,6 @@ const InvoiceMonthSummaryCard = ({ invoice, onPress }) => {
               Vencimiento: {invoice.dueDate}
             </Text>
           </View>
-        </View>
-        <InvoiceStatusBadge
-          status={invoice.status}
-          statusLabel={invoice.statusLabel}
-        />
-      </View>
 
       <View style={styles.monthCardDivider} />
 
@@ -1500,7 +1501,7 @@ const BillingScreen = ({
                 />
                 <Text style={styles.paySingleItemBtnText}>
                   {dItem.itemStatus === 'observado'
-                    ? 'Añadir documentación o transferencia de respaldo'
+                    ? 'Enviar comprobante'
                     : 'Imputar pago de este ítem por transferencia'}
                 </Text>
               </TouchableOpacity>
@@ -1797,7 +1798,7 @@ const styles = StyleSheet.create({
   monthCardTopRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
+    alignItems: 'flex-center',
     gap: 10,
   },
   monthCardTitle: {
