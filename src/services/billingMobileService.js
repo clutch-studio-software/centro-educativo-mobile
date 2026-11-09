@@ -188,7 +188,7 @@ const resolveInvoiceStatus = (matchingReceipt, isApprovedInFirestore, pendingBal
   };
 };
 
-const BILLING_PERIODS_CATALOG = [
+export const BILLING_PERIODS_CATALOG = [
   { label: 'Noviembre 2026', monthNum: '11', year: 2026, dueDate: '10/11/2026', isoStart: '2026-11-01', isoEnd: '2026-11-30' },
   { label: 'Octubre 2026', monthNum: '10', year: 2026, dueDate: '10/10/2026', isoStart: '2026-10-01', isoEnd: '2026-10-31' },
   { label: 'Septiembre 2026', monthNum: '09', year: 2026, dueDate: '10/09/2026', isoStart: '2026-09-01', isoEnd: '2026-09-30' },

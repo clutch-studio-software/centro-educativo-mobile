@@ -7,6 +7,7 @@ import {
   TextInput,
   ActivityIndicator,
   Linking,
+  Modal,
   StyleSheet,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -17,31 +18,808 @@ import {
   submitTransferVoucherWithItems,
 } from '../services/billingMobileService';
 import { pickAllowedDocument, formatFileSize } from '../services/storageMobileService';
-import {
-  buildMonthlyReminderEmailPayload,
-  buildDay20DebtEmailPayload,
-  triggerBillingEmailNotification,
-} from '../services/emailNotificationsService';
 import DigitalPaymentReceiptModal from '../components/DigitalPaymentReceiptModal';
 
-const BANK_OPTIONS = [
-  'Banco Santander Río',
-  'Banco Nación',
-  'Banco Galicia',
-  'Nuevo Banco del Chaco (NBCH)',
-  'Banco Macro',
-  'Mercado Pago',
+const DATE_PRESETS = [
+  {
+    id: 'current',
+    label: 'Mes Actual',
+    subLabel: 'Noviembre 2026',
+    from: '2026-11-01',
+    to: '2026-11-30',
+  },
+  {
+    id: 'last3',
+    label: 'Últimos 3 Meses',
+    subLabel: 'Sep – Nov 2026',
+    from: '2026-09-01',
+    to: '2026-11-30',
+  },
+  {
+    id: 'last4',
+    label: 'Últimos 4 Meses',
+    subLabel: 'Ago – Nov 2026',
+    from: '2026-08-01',
+    to: '2026-11-30',
+  },
+  {
+    id: 'year',
+    label: 'Todo el Ciclo 2026',
+    subLabel: 'Jun – Nov 2026',
+    from: '2026-03-01',
+    to: '2026-12-31',
+  },
+  {
+    id: 'custom',
+    label: 'Personalizado',
+    subLabel: 'Seleccionar rango Desde y Hasta',
+    from: null,
+    to: null,
+  },
 ];
+
+const MONTH_NAMES_ES = [
+  'Enero',
+  'Febrero',
+  'Marzo',
+  'Abril',
+  'Mayo',
+  'Junio',
+  'Julio',
+  'Agosto',
+  'Septiembre',
+  'Octubre',
+  'Noviembre',
+  'Diciembre',
+];
+
+const WEEKDAYS_SHORT = ['Lu', 'Ma', 'Mi', 'Ju', 'Vi', 'Sá', 'Do'];
+
+const padTwoDigits = (num) => String(num).padStart(2, '0');
+
+const parseIsoDateParts = (isoStr) => {
+  const parts = String(isoStr || '2026-11-01').split('-');
+  const year = Number(parts[0]) || 2026;
+  const month = Math.min(12, Math.max(1, Number(parts[1]) || 11));
+  const day = Math.min(31, Math.max(1, Number(parts[2]) || 1));
+  return { year, month, day };
+};
+
+const buildIsoDate = (year, month, day) =>
+  `${year}-${padTwoDigits(month)}-${padTwoDigits(day)}`;
+
+const formatIsoToDisplay = (isoStr) => {
+  const { year, month, day } = parseIsoDateParts(isoStr);
+  return `${padTwoDigits(day)}/${padTwoDigits(month)}/${year}`;
+};
+
+const buildCalendarWeeks = (year, month) => {
+  const daysInMonth = new Date(year, month, 0).getDate();
+  const firstDayOffset = (new Date(year, month - 1, 1).getDay() + 6) % 7;
+  const flatCells = [];
+
+  for (let i = 0; i < firstDayOffset; i += 1) {
+    flatCells.push({ key: `empty-start-${i}`, day: null, isoDate: null });
+  }
+
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    const isoDate = buildIsoDate(year, month, day);
+    flatCells.push({ key: isoDate, day, isoDate });
+  }
+
+  while (flatCells.length % 7 !== 0) {
+    flatCells.push({
+      key: `empty-end-${flatCells.length}`,
+      day: null,
+      isoDate: null,
+    });
+  }
+
+  const weeks = [];
+  for (let idx = 0; idx < flatCells.length; idx += 7) {
+    weeks.push(flatCells.slice(idx, idx + 7));
+  }
+  return weeks;
+};
+
+const resolvePresetIdForDates = (dateFrom, dateTo) => {
+  const found = DATE_PRESETS.find(
+    (p) => p.id !== 'custom' && p.from === dateFrom && p.to === dateTo
+  );
+  return found ? found.id : 'custom';
+};
+
+const resolvePeriodRangeLabel = (dateFrom, dateTo) => {
+  const matchedPreset = DATE_PRESETS.find(
+    (p) => p.id !== 'custom' && p.from === dateFrom && p.to === dateTo
+  );
+  if (matchedPreset) {
+    return matchedPreset.label;
+  }
+  return `${formatIsoToDisplay(dateFrom)} al ${formatIsoToDisplay(dateTo)}`;
+};
 
 const getItemStatusBadge = (itemStatus) => {
   if (itemStatus === 'conciliado') {
-    return { color: COLORS.emerald, label: '✓ Pagado' };
+    return { color: COLORS.emerald, label: 'Pagado' };
   }
   if (itemStatus === 'en_revision') {
-    return { color: COLORS.amber, label: '⏳ En revisión' };
+    return { color: COLORS.amber, label: 'En revisión' };
   }
-  return { color: COLORS.rose, label: '• Pendiente' };
+  return { color: COLORS.rose, label: 'Pendiente' };
 };
+
+const resolveInvoiceStatusTheme = (status) => {
+  if (status === 'conciliado') {
+    return {
+      bg: COLORS.emeraldSoft,
+      border: COLORS.emeraldBorder,
+      text: COLORS.emerald,
+      icon: 'checkmark-circle',
+    };
+  }
+  if (status === 'rechazado') {
+    return {
+      bg: COLORS.roseSoft,
+      border: COLORS.roseBorder,
+      text: COLORS.rose,
+      icon: 'alert-circle',
+    };
+  }
+  if (status === 'sin_comprobante') {
+    return {
+      bg: COLORS.roseSoft,
+      border: COLORS.roseBorder,
+      text: COLORS.rose,
+      icon: 'warning-outline',
+    };
+  }
+  return {
+    bg: COLORS.amberSoft,
+    border: COLORS.amberBorder,
+    text: COLORS.amber,
+    icon: 'time-outline',
+  };
+};
+
+const InvoiceStatusBadge = ({ status, statusLabel }) => {
+  const theme = resolveInvoiceStatusTheme(status);
+  return (
+    <View
+      style={[
+        styles.statusBadge,
+        { backgroundColor: theme.bg, borderColor: theme.border },
+      ]}
+    >
+      <Ionicons name={theme.icon} size={13} color={theme.text} />
+      <Text style={[styles.statusBadgeText, { color: theme.text }]}>
+        {statusLabel}
+      </Text>
+    </View>
+  );
+};
+
+/**
+ * Calendario interactivo para seleccionar fecha Desde o Hasta
+ */
+const InlineCalendarPicker = ({
+  activeField,
+  draftFrom,
+  draftTo,
+  onSelectDate,
+}) => {
+  const targetIso = activeField === 'from' ? draftFrom : draftTo;
+  const initialParts = parseIsoDateParts(targetIso);
+  const [viewYear, setViewYear] = useState(initialParts.year);
+  const [viewMonth, setViewMonth] = useState(initialParts.month);
+
+  const weeks = useMemo(
+    () => buildCalendarWeeks(viewYear, viewMonth),
+    [viewYear, viewMonth]
+  );
+
+  const handlePrevMonth = () => {
+    if (viewMonth === 1) {
+      setViewMonth(12);
+      setViewYear((y) => y - 1);
+    } else {
+      setViewMonth((m) => m - 1);
+    }
+  };
+
+  const handleNextMonth = () => {
+    if (viewMonth === 12) {
+      setViewMonth(1);
+      setViewYear((y) => y + 1);
+    } else {
+      setViewMonth((m) => m + 1);
+    }
+  };
+
+  return (
+    <View style={styles.calendarCard}>
+      <View style={styles.calendarHeader}>
+        <TouchableOpacity
+          style={styles.calendarNavBtn}
+          onPress={handlePrevMonth}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="chevron-back" size={16} color={COLORS.primary} />
+        </TouchableOpacity>
+
+        <View style={{ alignItems: 'center' }}>
+          <Text style={styles.calendarMonthTitle}>
+            {MONTH_NAMES_ES[viewMonth - 1]} {viewYear}
+          </Text>
+          <Text style={styles.calendarEditingHint}>
+            {activeField === 'from'
+              ? 'Seleccione la fecha Desde'
+              : 'Seleccione la fecha Hasta'}
+          </Text>
+        </View>
+
+        <TouchableOpacity
+          style={styles.calendarNavBtn}
+          onPress={handleNextMonth}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="chevron-forward" size={16} color={COLORS.primary} />
+        </TouchableOpacity>
+      </View>
+
+      <View style={styles.calendarWeekdaysRow}>
+        {WEEKDAYS_SHORT.map((dayName) => (
+          <Text key={dayName} style={styles.calendarWeekdayText}>
+            {dayName}
+          </Text>
+        ))}
+      </View>
+
+      <View style={styles.calendarGrid}>
+        {weeks.map((week, wIdx) => (
+          <View key={`week-${wIdx}`} style={styles.calendarWeekRow}>
+            {week.map((cell) => {
+              if (!cell.day) {
+                return <View key={cell.key} style={styles.calendarDayCell} />;
+              }
+
+              const isEndpoint =
+                cell.isoDate === draftFrom || cell.isoDate === draftTo;
+              const isInRange =
+                cell.isoDate > draftFrom && cell.isoDate < draftTo;
+
+              return (
+                <TouchableOpacity
+                  key={cell.key}
+                  style={[
+                    styles.calendarDayCell,
+                    isInRange && styles.calendarDayCellInRange,
+                    isEndpoint && styles.calendarDayCellEndpoint,
+                  ]}
+                  onPress={() => onSelectDate(cell.isoDate)}
+                  activeOpacity={0.75}
+                >
+                  <Text
+                    style={[
+                      styles.calendarDayText,
+                      isInRange && styles.calendarDayTextInRange,
+                      isEndpoint && styles.calendarDayTextEndpoint,
+                    ]}
+                  >
+                    {cell.day}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        ))}
+      </View>
+    </View>
+  );
+};
+
+/**
+ * Modal con Dropdown de períodos y opción "Personalizado" con dos campos calendario (Desde / Hasta)
+ */
+const DatePeriodFilterModal = ({
+  visible,
+  dateFrom,
+  dateTo,
+  onApply,
+  onClose,
+}) => {
+  const [draftFrom, setDraftFrom] = useState(dateFrom);
+  const [draftTo, setDraftTo] = useState(dateTo);
+  const [selectedPresetId, setSelectedPresetId] = useState(() =>
+    resolvePresetIdForDates(dateFrom, dateTo)
+  );
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [activeCalendarField, setActiveCalendarField] = useState(null);
+
+  const handleOpenSync = () => {
+    setDraftFrom(dateFrom);
+    setDraftTo(dateTo);
+    const initialId = resolvePresetIdForDates(dateFrom, dateTo);
+    setSelectedPresetId(initialId);
+    setIsDropdownOpen(false);
+    setActiveCalendarField(null);
+  };
+
+  const currentPresetOption =
+    DATE_PRESETS.find((p) => p.id === selectedPresetId) || DATE_PRESETS[0];
+
+  const handleSelectDropdownOption = (preset) => {
+    setSelectedPresetId(preset.id);
+    setIsDropdownOpen(false);
+    if (preset.id === 'custom') {
+      setActiveCalendarField('from');
+    } else {
+      setDraftFrom(preset.from);
+      setDraftTo(preset.to);
+      setActiveCalendarField(null);
+    }
+  };
+
+  const handleCalendarDatePicked = (pickedIso) => {
+    if (activeCalendarField === 'from') {
+      setDraftFrom(pickedIso);
+      if (pickedIso > draftTo) {
+        setDraftTo(pickedIso);
+      }
+      setActiveCalendarField('to');
+      return;
+    }
+
+    setDraftTo(pickedIso);
+    if (pickedIso < draftFrom) {
+      setDraftFrom(pickedIso);
+    }
+    setActiveCalendarField(null);
+  };
+
+  const toggleCalendarField = (field) => {
+    setIsDropdownOpen(false);
+    setActiveCalendarField((prev) => (prev === field ? null : field));
+  };
+
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onShow={handleOpenSync}
+      onRequestClose={onClose}
+    >
+      <View style={styles.modalBackdrop}>
+        <View style={styles.modalContainer}>
+          <View style={styles.modalHeader}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.modalTitle}>Filtrar por Período</Text>
+              <Text style={styles.modalSubtitle}>
+                Seleccione un período de consulta o un rango personalizado
+              </Text>
+            </View>
+            <TouchableOpacity style={styles.modalCloseBtn} onPress={onClose}>
+              <Ionicons name="close" size={20} color={COLORS.textSecondary} />
+            </TouchableOpacity>
+          </View>
+
+          <Text style={styles.modalSectionTitle}>PERÍODO DE CONSULTA</Text>
+
+          {/* Dropdown Selector */}
+          <View style={styles.dropdownWrapper}>
+            <TouchableOpacity
+              style={[
+                styles.dropdownTrigger,
+                isDropdownOpen && styles.dropdownTriggerOpen,
+              ]}
+              onPress={() => {
+                setIsDropdownOpen((prev) => !prev);
+                setActiveCalendarField(null);
+              }}
+              activeOpacity={0.78}
+            >
+              <View style={styles.dropdownTriggerLeft}>
+                <Ionicons
+                  name={
+                    selectedPresetId === 'custom'
+                      ? 'calendar-number-outline'
+                      : 'calendar-outline'
+                  }
+                  size={18}
+                  color={COLORS.emerald}
+                />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.dropdownTriggerTitle}>
+                    {currentPresetOption.label}
+                  </Text>
+                  <Text style={styles.dropdownTriggerSub}>
+                    {selectedPresetId === 'custom'
+                      ? `${formatIsoToDisplay(draftFrom)} – ${formatIsoToDisplay(draftTo)}`
+                      : currentPresetOption.subLabel}
+                  </Text>
+                </View>
+              </View>
+              <Ionicons
+                name={isDropdownOpen ? 'chevron-up' : 'chevron-down'}
+                size={18}
+                color={COLORS.textSecondary}
+              />
+            </TouchableOpacity>
+
+            {isDropdownOpen && (
+              <View style={styles.dropdownMenu}>
+                {DATE_PRESETS.map((preset) => {
+                  const isSelected = selectedPresetId === preset.id;
+                  return (
+                    <TouchableOpacity
+                      key={preset.id}
+                      style={[
+                        styles.dropdownOptionRow,
+                        isSelected && styles.dropdownOptionRowActive,
+                      ]}
+                      onPress={() => handleSelectDropdownOption(preset)}
+                      activeOpacity={0.75}
+                    >
+                      <View style={{ flex: 1 }}>
+                        <Text
+                          style={[
+                            styles.dropdownOptionTitle,
+                            isSelected && styles.dropdownOptionTitleActive,
+                          ]}
+                        >
+                          {preset.label}
+                        </Text>
+                        <Text
+                          style={[
+                            styles.dropdownOptionSub,
+                            isSelected && styles.dropdownOptionSubActive,
+                          ]}
+                        >
+                          {preset.subLabel}
+                        </Text>
+                      </View>
+                      {isSelected && (
+                        <Ionicons
+                          name="checkmark-circle"
+                          size={18}
+                          color={COLORS.emerald}
+                        />
+                      )}
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            )}
+          </View>
+
+          {/* Campos Calendario "Desde" y "Hasta" cuando se elige "Personalizado" */}
+          {selectedPresetId === 'custom' && (
+            <View style={styles.customDatesSection}>
+              <View style={styles.dateFieldsRow}>
+                <TouchableOpacity
+                  style={[
+                    styles.calendarFieldBox,
+                    activeCalendarField === 'from' &&
+                      styles.calendarFieldBoxActive,
+                  ]}
+                  onPress={() => toggleCalendarField('from')}
+                  activeOpacity={0.78}
+                >
+                  <Text style={styles.calendarFieldLabel}>DESDE</Text>
+                  <View style={styles.calendarFieldValueRow}>
+                    <Ionicons
+                      name="calendar-outline"
+                      size={15}
+                      color={
+                        activeCalendarField === 'from'
+                          ? COLORS.emerald
+                          : COLORS.primary
+                      }
+                    />
+                    <Text
+                      style={[
+                        styles.calendarFieldValue,
+                        activeCalendarField === 'from' &&
+                          styles.calendarFieldValueActive,
+                      ]}
+                    >
+                      {formatIsoToDisplay(draftFrom)}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[
+                    styles.calendarFieldBox,
+                    activeCalendarField === 'to' &&
+                      styles.calendarFieldBoxActive,
+                  ]}
+                  onPress={() => toggleCalendarField('to')}
+                  activeOpacity={0.78}
+                >
+                  <Text style={styles.calendarFieldLabel}>HASTA</Text>
+                  <View style={styles.calendarFieldValueRow}>
+                    <Ionicons
+                      name="calendar-outline"
+                      size={15}
+                      color={
+                        activeCalendarField === 'to'
+                          ? COLORS.emerald
+                          : COLORS.primary
+                      }
+                    />
+                    <Text
+                      style={[
+                        styles.calendarFieldValue,
+                        activeCalendarField === 'to' &&
+                          styles.calendarFieldValueActive,
+                      ]}
+                    >
+                      {formatIsoToDisplay(draftTo)}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              </View>
+
+              {activeCalendarField && (
+                <InlineCalendarPicker
+                  key={activeCalendarField}
+                  activeField={activeCalendarField}
+                  draftFrom={draftFrom}
+                  draftTo={draftTo}
+                  onSelectDate={handleCalendarDatePicked}
+                />
+              )}
+            </View>
+          )}
+
+          <View style={styles.modalActionsRow}>
+            <TouchableOpacity
+              style={styles.modalResetBtn}
+              onPress={() => {
+                onApply('2026-03-01', '2026-12-31');
+                onClose();
+              }}
+            >
+              <Text style={styles.modalResetBtnText}>Ver Todo 2026</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.modalApplyBtn}
+              onPress={() => {
+                onApply(draftFrom, draftTo);
+                onClose();
+              }}
+            >
+              <Ionicons name="checkmark" size={17} color={COLORS.white} />
+              <Text style={styles.modalApplyBtnText}>Aplicar Filtro</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+};
+
+/**
+ * Tarjeta compacta de cada mes en el listado principal
+ */
+const InvoiceMonthSummaryCard = ({ invoice, onPress }) => {
+  const theme = resolveInvoiceStatusTheme(invoice.status);
+  const hasPartialPending =
+    invoice.pendingBalance > 0 && invoice.coveredAmount > 0;
+
+  return (
+    <TouchableOpacity
+      style={[styles.monthSummaryCard, { borderLeftColor: theme.text }]}
+      onPress={onPress}
+      activeOpacity={0.78}
+    >
+      <View style={styles.monthCardTopRow}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.monthCardTitle}>{invoice.period}</Text>
+          <View style={styles.monthDueRow}>
+            <Ionicons
+              name="calendar-clear-outline"
+              size={13}
+              color={COLORS.textMuted}
+            />
+            <Text style={styles.monthCardDueText}>
+              Vencimiento: {invoice.dueDate}
+            </Text>
+          </View>
+        </View>
+        <InvoiceStatusBadge
+          status={invoice.status}
+          statusLabel={invoice.statusLabel}
+        />
+      </View>
+
+      <View style={styles.monthCardDivider} />
+
+      <View style={styles.monthCardBottomRow}>
+        <View>
+          <Text style={styles.monthTotalLabel}>TOTAL DEL MES</Text>
+          <Text style={styles.monthTotalValue}>
+            {formatCurrencyARS(invoice.totalAmount)}
+          </Text>
+          {hasPartialPending && (
+            <Text style={styles.monthPartialPendingText}>
+              Saldo pendiente: {formatCurrencyARS(invoice.pendingBalance)}
+            </Text>
+          )}
+        </View>
+
+        <View style={styles.monthDetailAction}>
+          <Text style={styles.monthDetailActionText}>Ver detalle</Text>
+          <View style={styles.monthChevronCircle}>
+            <Ionicons
+              name="chevron-forward"
+              size={15}
+              color={COLORS.primary}
+            />
+          </View>
+        </View>
+      </View>
+    </TouchableOpacity>
+  );
+};
+
+/**
+ * Vista dedicada con el detalle completo del mes seleccionado
+ */
+const InvoiceMonthDetailView = ({ invoice, onBack, onPayInvoice }) => (
+  <View style={styles.sectionWrap}>
+    <TouchableOpacity
+      style={styles.backToMonthsBtn}
+      onPress={onBack}
+      activeOpacity={0.75}
+    >
+      <Ionicons name="arrow-back" size={18} color={COLORS.primary} />
+      <Text style={styles.backToMonthsText}>Volver al listado de meses</Text>
+    </TouchableOpacity>
+
+    {/* Encabezado y Resumen Financiero del Mes */}
+    <View style={styles.invoiceCard}>
+      <View style={styles.invoiceHeader}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.invoicePeriod}>{invoice.period}</Text>
+          <Text style={styles.invoiceMeta}>
+            Vencimiento: {invoice.dueDate}
+          </Text>
+        </View>
+        <InvoiceStatusBadge
+          status={invoice.status}
+          statusLabel={invoice.statusLabel}
+        />
+      </View>
+
+      <View style={styles.amountsSummaryBar}>
+        <View style={styles.amountCol}>
+          <Text style={styles.amountSmallLabel}>Importe Total</Text>
+          <Text style={styles.amountBold}>
+            {formatCurrencyARS(invoice.totalAmount)}
+          </Text>
+        </View>
+        <View style={styles.amountCol}>
+          <Text style={styles.amountSmallLabel}>Cubierto / En Rev.</Text>
+          <Text style={[styles.amountBold, { color: COLORS.emerald }]}>
+            {formatCurrencyARS(invoice.coveredAmount)}
+          </Text>
+        </View>
+        <View style={styles.amountCol}>
+          <Text style={styles.amountSmallLabel}>Saldo Pendiente</Text>
+          <Text
+            style={[
+              styles.amountBold,
+              {
+                color:
+                  invoice.pendingBalance > 0 ? COLORS.rose : COLORS.emerald,
+              },
+            ]}
+          >
+            {formatCurrencyARS(invoice.pendingBalance)}
+          </Text>
+        </View>
+      </View>
+
+      {invoice.pendingBalance > 0 && (
+        <TouchableOpacity
+          style={styles.payInvoiceBtn}
+          onPress={() => onPayInvoice(invoice)}
+        >
+          <Ionicons name="card-outline" size={17} color={COLORS.white} />
+          <Text style={styles.payInvoiceBtnText}>
+            Enviar comprobante de transferencia
+          </Text>
+        </TouchableOpacity>
+      )}
+    </View>
+
+    {/* Desglose de Ítems del Mes */}
+    <View style={styles.invoiceCard}>
+      <Text style={styles.subSectionLabel}>
+        CONCEPTOS FACTURADOS EN EL MES ({invoice.items.length})
+      </Text>
+      <View style={styles.itemsListBox}>
+        {invoice.items.map((item) => {
+          const badge = getItemStatusBadge(item.itemStatus);
+          return (
+            <View key={item.id} style={styles.invoiceItemRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.invoiceItemLabel}>{item.label}</Text>
+                <Text style={styles.invoiceItemSub}>
+                  {item.studentName} · {item.detail}
+                </Text>
+              </View>
+              <View style={{ alignItems: 'flex-end' }}>
+                <Text style={styles.invoiceItemAmount}>
+                  {formatCurrencyARS(item.amount)}
+                </Text>
+                <Text style={[styles.itemMiniBadge, { color: badge.color }]}>
+                  {badge.label}
+                </Text>
+              </View>
+            </View>
+          );
+        })}
+      </View>
+    </View>
+
+    {/* Comprobantes Asociados al Mes */}
+    <View style={styles.vouchersBlock}>
+      <View style={styles.vouchersHeaderRow}>
+        <Ionicons
+          name="document-attach-outline"
+          size={16}
+          color={COLORS.indigo}
+        />
+        <Text style={styles.vouchersHeaderTitle}>
+          Comprobantes de Transferencia ({invoice.vouchers.length})
+        </Text>
+      </View>
+
+      {invoice.vouchers.length === 0 ? (
+        <Text style={styles.noVouchersText}>
+          No se registran comprobantes bancarios asociados a este mes.
+        </Text>
+      ) : (
+        invoice.vouchers.map((v, vIdx) => (
+          <View key={`${v.id}-${vIdx}`} style={styles.voucherRowCard}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.voucherCode}>
+                #{vIdx + 1} · Op: {v.operationCode} ({v.originBank})
+              </Text>
+              <Text style={styles.voucherMeta}>
+                Fecha: {v.operationDate} · Monto:{' '}
+                {formatCurrencyARS(v.transferredAmount)} · {v.voucherStatus}
+              </Text>
+              {v.selectedItemLabels?.length > 0 && (
+                <Text style={styles.voucherItemsCovered}>
+                  Ítems imputados: {v.selectedItemLabels.join(' + ')}
+                </Text>
+              )}
+            </View>
+            {v.fileUrl ? (
+              <TouchableOpacity
+                style={styles.openFileBtn}
+                onPress={() => Linking.openURL(v.fileUrl)}
+              >
+                <Ionicons
+                  name="open-outline"
+                  size={14}
+                  color={COLORS.emerald}
+                />
+                <Text style={styles.openFileBtnText}>Ver Archivo</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+        ))
+      )}
+    </View>
+  </View>
+);
 
 const BillingScreen = ({
   user,
@@ -57,21 +835,19 @@ const BillingScreen = ({
   const [dateFrom, setDateFrom] = useState('2026-08-01');
   const [dateTo, setDateTo] = useState('2026-11-30');
   const [statusFilter, setStatusFilter] = useState('all'); // 'all' | 'pending' | 'paid'
+  const [isPeriodModalOpen, setIsPeriodModalOpen] = useState(false);
+  const [selectedInvoicePeriod, setSelectedInvoicePeriod] = useState(null);
 
   // Estado para el formulario de pago con selección de ítems
   const [targetPeriod, setTargetPeriod] = useState('Noviembre 2026');
   const [selectedItemIds, setSelectedItemIds] = useState([]);
   const [customAmount, setCustomAmount] = useState('');
   const [operationCode, setOperationCode] = useState('');
-  const [originBank, setOriginBank] = useState('Banco Santander Río');
+  const [originBank] = useState('Banco Santander Río');
   const [transferDate, setTransferDate] = useState('2026-11-06');
   const [pickedFile, setPickedFile] = useState(null);
   const [submittingPayment, setSubmittingPayment] = useState(false);
   const [emittedDigitalReceipt, setEmittedDigitalReceipt] = useState(null);
-
-  // Estado para avisos automáticos por correo
-  const [sendingEmailType, setSendingEmailType] = useState(null);
-  const [previewEmailPayload, setPreviewEmailPayload] = useState(null);
 
   // Reporte integral de facturación y deuda
   const billingReport = useMemo(() => {
@@ -102,6 +878,15 @@ const BillingScreen = ({
     });
   }, [billingReport.filteredInvoices, statusFilter]);
 
+  const selectedInvoiceForDetail = useMemo(() => {
+    if (!selectedInvoicePeriod) return null;
+    return (
+      billingReport.allInvoices.find(
+        (inv) => inv.period === selectedInvoicePeriod
+      ) || null
+    );
+  }, [billingReport.allInvoices, selectedInvoicePeriod]);
+
   // Factura seleccionada para imputar pago en la pestaña "Pagar / Cargar Comprobante"
   const activeInvoiceForPayment = useMemo(() => {
     return (
@@ -119,7 +904,9 @@ const BillingScreen = ({
   // Si selectedItemIds está vacío por defecto, preseleccionamos los ítems pendientes de esa factura
   const effectiveSelectedIds = useMemo(() => {
     if (selectedItemIds.length > 0) {
-      return selectedItemIds.filter((id) => selectableItems.some((item) => item.id === id));
+      return selectedItemIds.filter((id) =>
+        selectableItems.some((item) => item.id === id)
+      );
     }
     return selectableItems.filter((i) => !i.isPaidOrInReview).map((i) => i.id);
   }, [selectedItemIds, selectableItems]);
@@ -149,8 +936,11 @@ const BillingScreen = ({
   };
 
   const handleSelectAllPending = () => {
-    const pendingIds = selectableItems.filter((i) => !i.isPaidOrInReview).map((i) => i.id);
-    const idsToUse = pendingIds.length > 0 ? pendingIds : selectableItems.map((i) => i.id);
+    const pendingIds = selectableItems
+      .filter((i) => !i.isPaidOrInReview)
+      .map((i) => i.id);
+    const idsToUse =
+      pendingIds.length > 0 ? pendingIds : selectableItems.map((i) => i.id);
     setSelectedItemIds(idsToUse);
     const sum = selectableItems
       .filter((i) => idsToUse.includes(i.id))
@@ -175,21 +965,24 @@ const BillingScreen = ({
     if (selectedItemsObjects.length === 0) {
       onFeedback?.({
         type: 'error',
-        message: 'Seleccione al menos un ítem (Cuota, Comedor, Transporte o Deporte) a abonar.',
+        message:
+          'Seleccione al menos un ítem (Cuota, Comedor, Transporte o Deporte) a abonar.',
       });
       return;
     }
     if (!operationCode.trim()) {
       onFeedback?.({
         type: 'error',
-        message: 'Ingrese el código o número de operación de la transferencia bancaria.',
+        message:
+          'Ingrese el código o número de operación de la transferencia bancaria.',
       });
       return;
     }
     if (!pickedFile) {
       onFeedback?.({
         type: 'error',
-        message: 'Adjunte el archivo del comprobante bancario (PDF, PNG o JPG hasta 2 MB).',
+        message:
+          'Adjunte el archivo del comprobante bancario (PDF, PNG o JPG hasta 2 MB).',
       });
       return;
     }
@@ -201,7 +994,8 @@ const BillingScreen = ({
         linkedStudents,
         invoicePeriod: targetPeriod,
         selectedItems: selectedItemsObjects,
-        declaredAmount: Number(customAmount) > 0 ? Number(customAmount) : selectedItemsTotal,
+        declaredAmount:
+          Number(customAmount) > 0 ? Number(customAmount) : selectedItemsTotal,
         operationCode: operationCode.trim(),
         originBank,
         transferDate,
@@ -243,297 +1037,122 @@ const BillingScreen = ({
     setTargetPeriod(debtItem.period || 'Noviembre 2026');
     setSelectedItemIds([debtItem.id]);
     setCustomAmount(String(debtItem.amount));
+    setSelectedInvoicePeriod(null);
     setSubTab('pay');
   };
 
-  const handleTriggerEmail = async (mode) => {
-    setSendingEmailType(mode);
-    try {
-      const currentInv = billingReport.allInvoices[0];
-      const payload =
-        mode === 'reminder'
-          ? buildMonthlyReminderEmailPayload({
-              tutorUser: user,
-              currentInvoice: currentInv,
-            })
-          : buildDay20DebtEmailPayload({
-              tutorUser: user,
-              debtItems: billingReport.debtItemsHistory.filter(
-                (i) => i.itemStatus === 'pendiente_pago'
-              ),
-              totalPendingDebt: billingReport.totalPendingDebt,
-              periodLabel: currentInv?.period || 'Noviembre 2026',
-            });
-
-      setPreviewEmailPayload(payload);
-      const res = await triggerBillingEmailNotification(payload);
-      onFeedback?.({
-        type: 'success',
-        message: res.message,
-      });
-    } catch (err) {
-      onFeedback?.({
-        type: 'error',
-        message: err?.message || 'No se pudo procesar el aviso por correo.',
-      });
-    } finally {
-      setSendingEmailType(null);
-    }
+  const handlePayFromInvoiceDetail = (inv) => {
+    setTargetPeriod(inv.period);
+    setSelectedItemIds(
+      inv.items.filter((i) => !i.isPaidOrInReview).map((i) => i.id)
+    );
+    setCustomAmount(String(inv.pendingBalance));
+    setSelectedInvoicePeriod(null);
+    setSubTab('pay');
   };
 
-  const renderStatusBadge = (status, statusLabel) => {
-    let bg = COLORS.amberSoft;
-    let border = COLORS.amberBorder;
-    let text = COLORS.amber;
-    let icon = 'time-outline';
-
-    if (status === 'conciliado') {
-      bg = COLORS.emeraldSoft;
-      border = COLORS.emeraldBorder;
-      text = COLORS.emerald;
-      icon = 'checkmark-circle';
-    } else if (status === 'rechazado') {
-      bg = COLORS.roseSoft;
-      border = COLORS.roseBorder;
-      text = COLORS.rose;
-      icon = 'alert-circle';
-    } else if (status === 'sin_comprobante') {
-      bg = COLORS.roseSoft;
-      border = COLORS.roseBorder;
-      text = COLORS.rose;
-      icon = 'warning-outline';
+  const renderInvoicesTab = () => {
+    if (selectedInvoiceForDetail) {
+      return (
+        <InvoiceMonthDetailView
+          invoice={selectedInvoiceForDetail}
+          onBack={() => setSelectedInvoicePeriod(null)}
+          onPayInvoice={handlePayFromInvoiceDetail}
+        />
+      );
     }
 
     return (
-      <View style={[styles.statusBadge, { backgroundColor: bg, borderColor: border }]}>
-        <Ionicons name={icon} size={13} color={text} />
-        <Text style={[styles.statusBadgeText, { color: text }]}>{statusLabel}</Text>
+      <View style={styles.sectionWrap}>
+        {/* Barra de Filtros Compacta y Limpia */}
+        <View style={styles.compactFilterContainer}>
+          <TouchableOpacity
+            style={styles.periodSelectorButton}
+            onPress={() => setIsPeriodModalOpen(true)}
+            activeOpacity={0.78}
+          >
+            <View style={styles.periodIconBox}>
+              <Ionicons
+                name="calendar-outline"
+                size={18}
+                color={COLORS.primary}
+              />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.periodSelectorLabel}>PERÍODO DE CONSULTA</Text>
+              <Text style={styles.periodSelectorValue} numberOfLines={1}>
+                {resolvePeriodRangeLabel(dateFrom, dateTo)}
+              </Text>
+            </View>
+            <View style={styles.periodFilterActionPill}>
+              <Ionicons
+                name="options-outline"
+                size={14}
+                color={COLORS.primary}
+              />
+              <Text style={styles.periodFilterActionText}>Cambiar</Text>
+            </View>
+          </TouchableOpacity>
+
+          <View style={styles.segmentedStatusRow}>
+            {[
+              { id: 'all', label: 'Todas' },
+              { id: 'pending', label: 'Pendientes' },
+              { id: 'paid', label: 'Conciliadas' },
+            ].map((st) => {
+              const isActive = statusFilter === st.id;
+              return (
+                <TouchableOpacity
+                  key={st.id}
+                  style={[
+                    styles.segmentedStatusBtn,
+                    isActive && styles.segmentedStatusBtnActive,
+                  ]}
+                  onPress={() => setStatusFilter(st.id)}
+                >
+                  <Text
+                    style={[
+                      styles.segmentedStatusText,
+                      isActive && styles.segmentedStatusTextActive,
+                    ]}
+                  >
+                    {st.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
+
+        {/* Listado de Meses en formato Botón Resumen */}
+        {displayedInvoices.length === 0 ? (
+          <View style={styles.emptyCard}>
+            <Ionicons
+              name="document-text-outline"
+              size={36}
+              color={COLORS.textMuted}
+            />
+            <Text style={styles.emptyTitle}>
+              Sin cuotas para el filtro seleccionado
+            </Text>
+            <Text style={styles.emptySub}>
+              Puede cambiar el período de fechas o el estado para consultar otros meses.
+            </Text>
+          </View>
+        ) : (
+          <View style={styles.monthsListWrap}>
+            {displayedInvoices.map((inv) => (
+              <InvoiceMonthSummaryCard
+                key={inv.id}
+                invoice={inv}
+                onPress={() => setSelectedInvoicePeriod(inv.period)}
+              />
+            ))}
+          </View>
+        )}
       </View>
     );
   };
-
-  const renderInvoicesTab = () => (
-    <View style={styles.sectionWrap}>
-      {/* Filtro por Período de Fechas */}
-      <View style={styles.filterCard}>
-        <View style={styles.filterHeader}>
-          <Ionicons name="calendar-outline" size={16} color={COLORS.primary} />
-          <Text style={styles.filterTitle}>
-            Filtrar Facturas y Comprobantes por Período de Fechas
-          </Text>
-        </View>
-
-        <View style={styles.dateInputsRow}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.smallLabel}>Desde (AAAA-MM-DD)</Text>
-            <TextInput
-              style={styles.dateInput}
-              value={dateFrom}
-              onChangeText={setDateFrom}
-              placeholder="2026-06-01"
-            />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.smallLabel}>Hasta (AAAA-MM-DD)</Text>
-            <TextInput
-              style={styles.dateInput}
-              value={dateTo}
-              onChangeText={setDateTo}
-              placeholder="2026-11-30"
-            />
-          </View>
-        </View>
-
-        <View style={styles.presetRow}>
-          <TouchableOpacity
-            style={styles.presetChip}
-            onPress={() => {
-              setDateFrom('2026-11-01');
-              setDateTo('2026-11-30');
-            }}
-          >
-            <Text style={styles.presetChipText}>Mes Actual (Nov)</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.presetChip}
-            onPress={() => {
-              setDateFrom('2026-09-01');
-              setDateTo('2026-11-30');
-            }}
-          >
-            <Text style={styles.presetChipText}>Últimos 3 Meses</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.presetChip}
-            onPress={() => {
-              setDateFrom('2026-03-01');
-              setDateTo('2026-12-31');
-            }}
-          >
-            <Text style={styles.presetChipText}>Todo el Ciclo 2026</Text>
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.statusFilterRow}>
-          {[
-            { id: 'all', label: 'Todas las facturas' },
-            { id: 'pending', label: 'Pendientes' },
-            { id: 'paid', label: 'Conciliadas' },
-          ].map((st) => (
-            <TouchableOpacity
-              key={st.id}
-              style={[
-                styles.statusFilterChip,
-                statusFilter === st.id && styles.statusFilterChipActive,
-              ]}
-              onPress={() => setStatusFilter(st.id)}
-            >
-              <Text
-                style={[
-                  styles.statusFilterText,
-                  statusFilter === st.id && styles.statusFilterTextActive,
-                ]}
-              >
-                {st.label}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-      </View>
-
-      {/* Listado de Facturas y sus Comprobantes Asociados */}
-      {displayedInvoices.map((inv) => (
-        <View key={inv.id} style={styles.invoiceCard}>
-          <View style={styles.invoiceHeader}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.invoicePeriod}>{inv.period}</Text>
-              <Text style={styles.invoiceMeta}>
-                Vencimiento: {inv.dueDate}
-              </Text>
-            </View>
-            {renderStatusBadge(inv.status, inv.statusLabel)}
-          </View>
-
-          <View style={styles.amountsSummaryBar}>
-            <View>
-              <Text style={styles.amountSmallLabel}>Importe Total</Text>
-              <Text style={styles.amountBold}>{formatCurrencyARS(inv.totalAmount)}</Text>
-            </View>
-            <View>
-              <Text style={styles.amountSmallLabel}>Cubierto / En Rev.</Text>
-              <Text style={[styles.amountBold, { color: COLORS.emerald }]}>
-                {formatCurrencyARS(inv.coveredAmount)}
-              </Text>
-            </View>
-            <View>
-              <Text style={styles.amountSmallLabel}>Saldo Pendiente</Text>
-              <Text
-                style={[
-                  styles.amountBold,
-                  { color: inv.pendingBalance > 0 ? COLORS.rose : COLORS.emerald },
-                ]}
-              >
-                {formatCurrencyARS(inv.pendingBalance)}
-              </Text>
-            </View>
-          </View>
-
-          {/* Composición de Ítems de la Factura */}
-          <Text style={styles.subSectionLabel}>
-            COMPOSICIÓN DE ÍTEMS ({inv.items.length}):
-          </Text>
-          <View style={styles.itemsListBox}>
-            {inv.items.map((item) => (
-              <View key={item.id} style={styles.invoiceItemRow}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.invoiceItemLabel}>{item.label}</Text>
-                  <Text style={styles.invoiceItemSub}>
-                    {item.studentName} · {item.detail}
-                  </Text>
-                </View>
-                <View style={{ alignItems: 'flex-end' }}>
-                  <Text style={styles.invoiceItemAmount}>
-                    {formatCurrencyARS(item.amount)}
-                  </Text>
-                  <Text
-                    style={[
-                      styles.itemMiniBadge,
-                      { color: getItemStatusBadge(item.itemStatus).color },
-                    ]}
-                  >
-                    {getItemStatusBadge(item.itemStatus).label}
-                  </Text>
-                </View>
-              </View>
-            ))}
-          </View>
-
-          {/* Comprobantes de Pago Asociados a esta Factura (Soporta 1 o más comprobantes) */}
-          <View style={styles.vouchersBlock}>
-            <View style={styles.vouchersHeaderRow}>
-              <Ionicons name="document-attach-outline" size={15} color={COLORS.indigo} />
-              <Text style={styles.vouchersHeaderTitle}>
-                Comprobantes de Transferencia Asociados ({inv.vouchers.length})
-              </Text>
-            </View>
-
-            {inv.vouchers.length === 0 ? (
-              <Text style={styles.noVouchersText}>
-                No se registran comprobantes bancarios asociados a esta factura.
-              </Text>
-            ) : (
-              inv.vouchers.map((v, vIdx) => (
-                <View key={`${v.id}-${vIdx}`} style={styles.voucherRowCard}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.voucherCode}>
-                      #{vIdx + 1} · Op: {v.operationCode} ({v.originBank})
-                    </Text>
-                    <Text style={styles.voucherMeta}>
-                      Fecha: {v.operationDate} · Monto:{' '}
-                      {formatCurrencyARS(v.transferredAmount)} · {v.voucherStatus}
-                    </Text>
-                    {v.selectedItemLabels?.length > 0 && (
-                      <Text style={styles.voucherItemsCovered}>
-                        Ítems imputados: {v.selectedItemLabels.join(' + ')}
-                      </Text>
-                    )}
-                  </View>
-                  {v.fileUrl ? (
-                    <TouchableOpacity
-                      style={styles.openFileBtn}
-                      onPress={() => Linking.openURL(v.fileUrl)}
-                    >
-                      <Ionicons name="open-outline" size={14} color={COLORS.emerald} />
-                      <Text style={styles.openFileBtnText}>Ver Archivo</Text>
-                    </TouchableOpacity>
-                  ) : null}
-                </View>
-              ))
-            )}
-          </View>
-
-          {inv.pendingBalance > 0 && (
-            <TouchableOpacity
-              style={styles.payInvoiceBtn}
-              onPress={() => {
-                setTargetPeriod(inv.period);
-                setSelectedItemIds(
-                  inv.items.filter((i) => !i.isPaidOrInReview).map((i) => i.id)
-                );
-                setCustomAmount(String(inv.pendingBalance));
-                setSubTab('pay');
-              }}
-            >
-              <Ionicons name="card-outline" size={16} color={COLORS.white} />
-              <Text style={styles.payInvoiceBtnText}>
-                Seleccionar Ítems Pendientes y Cargar Comprobante
-              </Text>
-            </TouchableOpacity>
-          )}
-        </View>
-      ))}
-    </View>
-  );
 
   const renderDebtTab = () => (
     <View style={styles.sectionWrap}>
@@ -551,15 +1170,24 @@ const BillingScreen = ({
 
       {billingReport.debtItemsHistory.length === 0 ? (
         <View style={styles.emptyCard}>
-          <Ionicons name="checkmark-done-circle" size={38} color={COLORS.emerald} />
-          <Text style={styles.emptyTitle}>Sin Deuda Registrada en el Período</Text>
+          <Ionicons
+            name="checkmark-done-circle"
+            size={38}
+            color={COLORS.emerald}
+          />
+          <Text style={styles.emptyTitle}>
+            Sin Deuda Registrada en el Período
+          </Text>
           <Text style={styles.emptySub}>
             Todos los ítems de cuota, comedor, transporte y deportes se encuentran conciliados.
           </Text>
         </View>
       ) : (
         billingReport.debtItemsHistory.map((dItem) => (
-          <View key={`${dItem.invoiceId}-${dItem.id}`} style={styles.debtItemCard}>
+          <View
+            key={`${dItem.invoiceId}-${dItem.id}`}
+            style={styles.debtItemCard}
+          >
             <View style={styles.debtItemHeader}>
               <View style={styles.categoryPill}>
                 <Text style={styles.categoryPillText}>
@@ -587,7 +1215,9 @@ const BillingScreen = ({
                     styles.debtItemStatusText,
                     {
                       color:
-                        dItem.itemStatus === 'en_revision' ? COLORS.amber : COLORS.rose,
+                        dItem.itemStatus === 'en_revision'
+                          ? COLORS.amber
+                          : COLORS.rose,
                     },
                   ]}
                 >
@@ -603,7 +1233,11 @@ const BillingScreen = ({
                 style={styles.paySingleItemBtn}
                 onPress={() => handleQuickPayFromDebtItem(dItem)}
               >
-                <Ionicons name="arrow-forward-circle-outline" size={15} color={COLORS.accent} />
+                <Ionicons
+                  name="arrow-forward-circle-outline"
+                  size={15}
+                  color={COLORS.accent}
+                />
                 <Text style={styles.paySingleItemBtnText}>
                   Imputar pago de este ítem por transferencia
                 </Text>
@@ -622,15 +1256,20 @@ const BillingScreen = ({
         <View style={styles.bankHeaderRow}>
           <Ionicons name="business-outline" size={18} color={COLORS.emerald} />
           <Text style={styles.bankHeaderTitle}>
-            Pago Exclusivo por Transferencia Bancaria (No se admite efectivo)
+            Pago Exclusivo por Transferencia Bancaria
           </Text>
         </View>
         <Text style={styles.bankLine}>
-          • Banco: <Text style={styles.bankBold}>Banco Santander Río</Text> · Titular:{' '}
-          <Text style={styles.bankBold}>Centro Educativo Integral SRL</Text>
+          • Banco: <Text style={styles.bankBold}>Banco Santander Río</Text>
         </Text>
         <Text style={styles.bankLine}>
-          • CBU: <Text style={styles.bankBold}>0720026720000001289412</Text> · Alias:{' '}
+          • Titular:{' '} <Text style={[styles.bankBold, { color: COLORS.emerald }]}>Centro Educativo Integral SRL</Text>
+        </Text>
+        <Text style={styles.bankLine}>
+          • CBU: <Text style={styles.bankBold}>0720026720000001289412</Text>
+        </Text>
+        <Text style={styles.bankLine}>
+          • Alias:{' '}
           <Text style={[styles.bankBold, { color: COLORS.emerald }]}>
             COLEGIO.CENTRO.PAGOS
           </Text>
@@ -652,7 +1291,10 @@ const BillingScreen = ({
             return (
               <TouchableOpacity
                 key={p.label}
-                style={[styles.periodOption, active && styles.periodOptionActive]}
+                style={[
+                  styles.periodOption,
+                  active && styles.periodOptionActive,
+                ]}
                 onPress={() => {
                   setTargetPeriod(p.label);
                   setSelectedItemIds([]);
@@ -687,12 +1329,13 @@ const BillingScreen = ({
       <View style={styles.formSectionCard}>
         <View style={styles.stepHeaderBetween}>
           <Text style={styles.stepTitle}>
-            2. Seleccione los Ítems a Pagar ({selectedItemsObjects.length} elegidos)
+            2. Seleccione los Ítems a Pagar
           </Text>
           <TouchableOpacity onPress={handleSelectAllPending}>
             <Text style={styles.selectAllLink}>Marcar pendientes</Text>
           </TouchableOpacity>
         </View>
+        
 
         <View style={{ gap: 8, marginTop: 10 }}>
           {selectableItems.map((item) => {
@@ -743,22 +1386,28 @@ const BillingScreen = ({
       {/* Paso 3: Datos de la Transferencia y Archivo en Storage */}
       <View style={styles.formSectionCard}>
         <Text style={styles.stepTitle}>
-          3. Datos de la Transferencia y Comprobante (Máx. 2 MB)
+          3. Datos de la Transferencia y Comprobante
         </Text>
 
         <View style={styles.fieldWrap}>
-          <Text style={styles.inputLabel}>Monto Declarado Transferido ($ ARS) *</Text>
+          <Text style={styles.inputLabel}>
+            Monto Declarado Transferido ($ ARS) *
+          </Text>
           <TextInput
             style={styles.textInput}
             keyboardType="numeric"
-            value={customAmount !== '' ? customAmount : String(selectedItemsTotal)}
+            value={
+              customAmount !== '' ? customAmount : String(selectedItemsTotal)
+            }
             onChangeText={setCustomAmount}
             placeholder="Ej: 110000"
           />
         </View>
 
         <View style={styles.fieldWrap}>
-          <Text style={styles.inputLabel}>Código / Nº de Operación Bancaria *</Text>
+          <Text style={styles.inputLabel}>
+            Código / Nº de Operación Bancaria *
+          </Text>
           <TextInput
             style={styles.textInput}
             value={operationCode}
@@ -769,36 +1418,9 @@ const BillingScreen = ({
         </View>
 
         <View style={styles.fieldWrap}>
-          <Text style={styles.inputLabel}>Banco / Billetera de Origen</Text>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={{ gap: 8, marginTop: 4 }}
-          >
-            {BANK_OPTIONS.map((bank) => (
-              <TouchableOpacity
-                key={bank}
-                style={[
-                  styles.bankChip,
-                  originBank === bank && styles.bankChipActive,
-                ]}
-                onPress={() => setOriginBank(bank)}
-              >
-                <Text
-                  style={[
-                    styles.bankChipText,
-                    originBank === bank && styles.bankChipTextActive,
-                  ]}
-                >
-                  {bank}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
-        </View>
-
-        <View style={styles.fieldWrap}>
-          <Text style={styles.inputLabel}>Fecha de Transferencia (AAAA-MM-DD)</Text>
+          <Text style={styles.inputLabel}>
+            Fecha de Transferencia (AAAA-MM-DD)
+          </Text>
           <TextInput
             style={styles.textInput}
             value={transferDate}
@@ -809,7 +1431,7 @@ const BillingScreen = ({
 
         <View style={styles.fieldWrap}>
           <Text style={styles.inputLabel}>
-            Archivo del Comprobante (.pdf, .png, .jpg, .jpeg — máx. 2 MB) *
+            Archivo del Comprobante*
           </Text>
           <TouchableOpacity
             style={styles.filePickerBtn}
@@ -820,19 +1442,22 @@ const BillingScreen = ({
               <Text style={styles.filePickerTitle}>
                 {pickedFile
                   ? pickedFile.name
-                  : 'Seleccionar Comprobante Bancario (PDF / Imagen)'}
+                  : 'Seleccionar Comprobante Bancario'}
               </Text>
               <Text style={styles.filePickerSub}>
                 {pickedFile
                   ? `Tamaño: ${formatFileSize(pickedFile.size)} · Tipo: ${pickedFile.mimeType}`
-                  : 'Se almacenará de forma segura en Firebase Storage (vouchers/{uid}/...)'}
+                  : 'Tipo de archivo permitido (.pdf, .png, .jpg, .jpeg — máx. 2 MB) '}
               </Text>
             </View>
           </TouchableOpacity>
         </View>
 
         <TouchableOpacity
-          style={[styles.submitVoucherBtn, submittingPayment && { opacity: 0.65 }]}
+          style={[
+            styles.submitVoucherBtn,
+            submittingPayment && { opacity: 0.65 },
+          ]}
           onPress={handleSubmitVoucher}
           disabled={submittingPayment}
         >
@@ -840,9 +1465,13 @@ const BillingScreen = ({
             <ActivityIndicator size="small" color={COLORS.white} />
           ) : (
             <>
-              <Ionicons name="checkmark-done-circle" size={19} color={COLORS.white} />
+              <Ionicons
+                name="checkmark-done-circle"
+                size={19}
+                color={COLORS.white}
+              />
               <Text style={styles.submitVoucherBtnText}>
-                Confirmar Pago y Emitir Comprobante Digital
+                Enviar aviso de pago
               </Text>
             </>
           )}
@@ -851,94 +1480,7 @@ const BillingScreen = ({
     </View>
   );
 
-  const renderEmailsTab = () => (
-    <View style={styles.sectionWrap}>
-      <View style={styles.emailRuleCard}>
-        <View style={styles.emailRuleHeader}>
-          <View style={styles.emailIconBox}>
-            <Ionicons name="calendar" size={20} color={COLORS.emerald} />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.emailRuleTitle}>
-              Hito 1: Recordatorio del Último Día Hábil del Mes
-            </Text>
-            <Text style={styles.emailRuleDesc}>
-              Envía por mail a cada padre el total que debe abonar, detallando la composición de ese valor (Cuota + Comedor + Transporte + Deportes) y adjuntando la factura.
-            </Text>
-          </View>
-        </View>
-
-        <TouchableOpacity
-          style={styles.triggerEmailBtn}
-          onPress={() => handleTriggerEmail('reminder')}
-          disabled={sendingEmailType === 'reminder'}
-        >
-          <Ionicons name="send-outline" size={15} color={COLORS.white} />
-          <Text style={styles.triggerEmailBtnText}>
-            {sendingEmailType === 'reminder'
-              ? 'Generando y enviando...'
-              : 'Generar y Enviar Recordatorio de Fin de Mes'}
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      <View style={styles.emailRuleCard}>
-        <View style={styles.emailRuleHeader}>
-          <View style={[styles.emailIconBox, { backgroundColor: COLORS.roseSoft }]}>
-            <Ionicons name="alert-circle" size={20} color={COLORS.rose} />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.emailRuleTitle}>
-              Hito 2: Aviso de Deuda del Día 20 de cada Mes
-            </Text>
-            <Text style={styles.emailRuleDesc}>
-              Envía el día 20 de cada mes a cada padre el estado de deuda discriminado por ítem en caso de no haber registrado el pago completo del período.
-            </Text>
-          </View>
-        </View>
-
-        <TouchableOpacity
-          style={[styles.triggerEmailBtn, { backgroundColor: COLORS.rose }]}
-          onPress={() => handleTriggerEmail('debt20')}
-          disabled={sendingEmailType === 'debt20'}
-        >
-          <Ionicons name="warning-outline" size={15} color={COLORS.white} />
-          <Text style={styles.triggerEmailBtnText}>
-            {sendingEmailType === 'debt20'
-              ? 'Generando aviso...'
-              : 'Generar y Enviar Aviso de Deuda (Día 20)'}
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      {previewEmailPayload && (
-        <View style={styles.emailPreviewCard}>
-          <Text style={styles.emailPreviewTag}>
-            PREVISUALIZACIÓN DEL CORREO GENERADO ({previewEmailPayload.scheduledRule})
-          </Text>
-          <Text style={styles.emailPreviewLine}>
-            Para: <Text style={{ fontWeight: '700' }}>{previewEmailPayload.to}</Text>
-          </Text>
-          <Text style={styles.emailPreviewLine}>
-            Asunto: <Text style={{ fontWeight: '700' }}>{previewEmailPayload.subject}</Text>
-          </Text>
-          <View style={styles.emailPreviewDivider} />
-          {(previewEmailPayload.items || previewEmailPayload.debtItems || []).map(
-            (it, idx) => (
-              <View key={idx} style={styles.emailPreviewItem}>
-                <Text style={styles.emailPreviewItemText}>
-                  • {it.label} ({it.studentName})
-                </Text>
-                <Text style={styles.emailPreviewItemAmount}>
-                  {formatCurrencyARS(it.amount)}
-                </Text>
-              </View>
-            )
-          )}
-        </View>
-      )}
-    </View>
-  );
+  const showGlobalKpis = !(subTab === 'invoices' && selectedInvoiceForDetail);
 
   return (
     <View style={styles.container}>
@@ -950,58 +1492,71 @@ const BillingScreen = ({
           contentContainerStyle={styles.subTabsScroll}
         >
           <TouchableOpacity
-            style={[styles.subTabBtn, subTab === 'invoices' && styles.subTabBtnActive]}
-            onPress={() => setSubTab('invoices')}
+            style={[
+              styles.subTabBtn,
+              subTab === 'invoices' && styles.subTabBtnActive,
+            ]}
+            onPress={() => {
+              setSelectedInvoicePeriod(null);
+              setSubTab('invoices');
+            }}
           >
             <Ionicons
               name="receipt-outline"
               size={15}
               color={subTab === 'invoices' ? COLORS.white : COLORS.textSecondary}
             />
-            <Text style={[styles.subTabText, subTab === 'invoices' && styles.subTabTextActive]}>
-              Facturas y Comprobantes
+            <Text
+              style={[
+                styles.subTabText,
+                subTab === 'invoices' && styles.subTabTextActive,
+              ]}
+            >
+              Facturas por Mes
             </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
             style={[styles.subTabBtn, subTab === 'debt' && styles.subTabBtnActive]}
-            onPress={() => setSubTab('debt')}
+            onPress={() => {
+              setSelectedInvoicePeriod(null);
+              setSubTab('debt');
+            }}
           >
             <Ionicons
               name="list-outline"
               size={15}
               color={subTab === 'debt' ? COLORS.white : COLORS.textSecondary}
             />
-            <Text style={[styles.subTabText, subTab === 'debt' && styles.subTabTextActive]}>
+            <Text
+              style={[
+                styles.subTabText,
+                subTab === 'debt' && styles.subTabTextActive,
+              ]}
+            >
               Deuda por Ítem ({billingReport.debtItemsHistory.length})
             </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
             style={[styles.subTabBtn, subTab === 'pay' && styles.subTabBtnActive]}
-            onPress={() => setSubTab('pay')}
+            onPress={() => {
+              setSelectedInvoicePeriod(null);
+              setSubTab('pay');
+            }}
           >
             <Ionicons
               name="cloud-upload-outline"
               size={15}
               color={subTab === 'pay' ? COLORS.white : COLORS.textSecondary}
             />
-            <Text style={[styles.subTabText, subTab === 'pay' && styles.subTabTextActive]}>
+            <Text
+              style={[
+                styles.subTabText,
+                subTab === 'pay' && styles.subTabTextActive,
+              ]}
+            >
               Seleccionar Ítems y Pagar
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.subTabBtn, subTab === 'emails' && styles.subTabBtnActive]}
-            onPress={() => setSubTab('emails')}
-          >
-            <Ionicons
-              name="mail-unread-outline"
-              size={15}
-              color={subTab === 'emails' ? COLORS.white : COLORS.textSecondary}
-            />
-            <Text style={[styles.subTabText, subTab === 'emails' && styles.subTabTextActive]}>
-              Avisos Email (Día 20 / Fin de Mes)
             </Text>
           </TouchableOpacity>
         </ScrollView>
@@ -1009,25 +1564,27 @@ const BillingScreen = ({
 
       <ScrollView contentContainerStyle={styles.scrollContent}>
         {/* Resumen Ejecutivo de Saldos */}
-        <View style={styles.kpiRow}>
-          <View style={[styles.kpiCard, { borderLeftColor: COLORS.rose }]}>
-            <Text style={styles.kpiLabel}>DEUDA PENDIENTE</Text>
-            <Text style={[styles.kpiValue, { color: COLORS.rose }]}>
-              {formatCurrencyARS(billingReport.totalPendingDebt)}
-            </Text>
-            <Text style={styles.kpiSub}>Sin comprobante cargado</Text>
-          </View>
+        {showGlobalKpis && (
+          <View style={styles.kpiRow}>
+            <View style={[styles.kpiCard, { borderLeftColor: COLORS.rose }]}>
+              <Text style={styles.kpiLabel}>DEUDA PENDIENTE</Text>
+              <Text style={[styles.kpiValue, { color: COLORS.rose }]}>
+                {formatCurrencyARS(billingReport.totalPendingDebt)}
+              </Text>
+              <Text style={styles.kpiSub}>Sin comprobante cargado</Text>
+            </View>
 
-          <View style={[styles.kpiCard, { borderLeftColor: COLORS.amber }]}>
-            <Text style={styles.kpiLabel}>EN CONCILIACIÓN</Text>
-            <Text style={[styles.kpiValue, { color: COLORS.amber }]}>
-              {formatCurrencyARS(billingReport.totalInReviewAmount)}
-            </Text>
-            <Text style={styles.kpiSub}>Transferencia informada</Text>
+            <View style={[styles.kpiCard, { borderLeftColor: COLORS.amber }]}>
+              <Text style={styles.kpiLabel}>EN CONCILIACIÓN</Text>
+              <Text style={[styles.kpiValue, { color: COLORS.amber }]}>
+                {formatCurrencyARS(billingReport.totalInReviewAmount)}
+              </Text>
+              <Text style={styles.kpiSub}>Transferencia informada</Text>
+            </View>
           </View>
-        </View>
+        )}
 
-        {/* SUB-TAB 1: FACTURAS Y COMPROBANTES ASOCIADOS EN UN PERÍODO DE FECHAS */}
+        {/* SUB-TAB 1: FACTURAS Y COMPROBANTES POR MES */}
         {subTab === 'invoices' && renderInvoicesTab()}
 
         {/* SUB-TAB 2: HISTORIAL DE DEUDA DISCRIMINADO POR CADA ÍTEM DE PAGO */}
@@ -1035,10 +1592,18 @@ const BillingScreen = ({
 
         {/* SUB-TAB 3: SELECCIONAR ÍTEMS A PAGAR Y CARGAR COMPROBANTE DE TRANSFERENCIA */}
         {subTab === 'pay' && renderPayTab()}
-
-        {/* SUB-TAB 4: AUTOMATIZACIÓN DE NOTIFICACIONES POR CORREO (ÚLTIMO DÍA HÁBIL Y DÍA 20) */}
-        {subTab === 'emails' && renderEmailsTab()}
       </ScrollView>
+
+      <DatePeriodFilterModal
+        visible={isPeriodModalOpen}
+        dateFrom={dateFrom}
+        dateTo={dateTo}
+        onApply={(nextFrom, nextTo) => {
+          setDateFrom(nextFrom);
+          setDateTo(nextTo);
+        }}
+        onClose={() => setIsPeriodModalOpen(false)}
+      />
 
       <DigitalPaymentReceiptModal
         visible={Boolean(emittedDigitalReceipt)}
@@ -1058,7 +1623,7 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.surface,
     borderBottomWidth: 1,
     borderBottomColor: COLORS.border,
-    paddingVertical: 8,
+    paddingVertical: 10,
   },
   subTabsScroll: {
     paddingHorizontal: 14,
@@ -1068,9 +1633,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    paddingHorizontal: 12,
+    paddingHorizontal: 13,
     paddingVertical: 8,
-    borderRadius: 8,
+    borderRadius: 10,
     backgroundColor: COLORS.surfaceAlt,
     borderWidth: 1,
     borderColor: COLORS.border,
@@ -1088,19 +1653,19 @@ const styles = StyleSheet.create({
     color: COLORS.white,
   },
   scrollContent: {
-    padding: 14,
-    paddingBottom: 32,
-    gap: 14,
+    padding: 16,
+    paddingBottom: 36,
+    gap: 16,
   },
   kpiRow: {
     flexDirection: 'row',
-    gap: 10,
+    gap: 12,
   },
   kpiCard: {
     flex: 1,
     backgroundColor: COLORS.surface,
-    borderRadius: 12,
-    padding: 12,
+    borderRadius: 14,
+    padding: 14,
     borderWidth: 1,
     borderColor: COLORS.border,
     borderLeftWidth: 4,
@@ -1112,7 +1677,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   kpiValue: {
-    fontSize: 17,
+    fontSize: 18,
     fontWeight: '900',
     marginTop: 4,
   },
@@ -1124,95 +1689,464 @@ const styles = StyleSheet.create({
   sectionWrap: {
     gap: 14,
   },
-  filterCard: {
+  compactFilterContainer: {
     backgroundColor: COLORS.surface,
-    borderRadius: 12,
-    padding: 14,
+    borderRadius: 14,
+    padding: 12,
     borderWidth: 1,
     borderColor: COLORS.border,
     gap: 10,
   },
-  filterHeader: {
+  periodSelectorButton: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 10,
+    backgroundColor: COLORS.background,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  periodIconBox: {
+    width: 34,
+    height: 34,
+    borderRadius: 8,
+    backgroundColor: COLORS.surfaceAlt,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  periodSelectorLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: COLORS.textMuted,
+    letterSpacing: 0.4,
+  },
+  periodSelectorValue: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: COLORS.text,
+    marginTop: 1,
+  },
+  periodFilterActionPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: COLORS.surfaceAlt,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: COLORS.borderStrong,
+  },
+  periodFilterActionText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: COLORS.primary,
+  },
+  segmentedStatusRow: {
+    flexDirection: 'row',
+    backgroundColor: COLORS.surfaceAlt,
+    borderRadius: 10,
+    padding: 4,
+    gap: 4,
+  },
+  segmentedStatusBtn: {
+    flex: 1,
+    paddingVertical: 7,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  segmentedStatusBtnActive: {
+    backgroundColor: COLORS.primary,
+  },
+  segmentedStatusText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: COLORS.textSecondary,
+  },
+  segmentedStatusTextActive: {
+    color: COLORS.white,
+  },
+  monthsListWrap: {
+    gap: 12,
+  },
+  monthSummaryCard: {
+    backgroundColor: COLORS.surface,
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderLeftWidth: 4,
+    gap: 12,
+  },
+  monthCardTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  monthCardTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: COLORS.text,
+  },
+  monthDueRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginTop: 4,
+  },
+  monthCardDueText: {
+    fontSize: 12,
+    color: COLORS.textSecondary,
+    fontWeight: '500',
+  },
+  monthCardDivider: {
+    height: 1,
+    backgroundColor: COLORS.surfaceAlt,
+  },
+  monthCardBottomRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  monthTotalLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: COLORS.textMuted,
+    letterSpacing: 0.4,
+  },
+  monthTotalValue: {
+    fontSize: 17,
+    fontWeight: '900',
+    color: COLORS.text,
+    marginTop: 2,
+  },
+  monthPartialPendingText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: COLORS.rose,
+    marginTop: 2,
+  },
+  monthDetailAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  monthDetailActionText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: COLORS.primary,
+  },
+  monthChevronCircle: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: COLORS.surfaceAlt,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  backToMonthsBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 8,
+    backgroundColor: COLORS.surface,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  backToMonthsText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: COLORS.primary,
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.55)',
+    justifyContent: 'center',
+    padding: 18,
+  },
+  modalContainer: {
+    backgroundColor: COLORS.surface,
+    borderRadius: 18,
+    padding: 18,
+    gap: 14,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  modalTitle: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: COLORS.text,
+  },
+  modalSubtitle: {
+    fontSize: 12,
+    color: COLORS.textSecondary,
+    marginTop: 2,
+  },
+  modalCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: COLORS.surfaceAlt,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalSectionTitle: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: COLORS.textMuted,
+    letterSpacing: 0.5,
+  },
+  dropdownWrapper: {
     gap: 6,
   },
-  filterTitle: {
+  dropdownTrigger: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: COLORS.background,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderWidth: 1,
+    borderColor: COLORS.borderStrong,
+    gap: 10,
+  },
+  dropdownTriggerOpen: {
+    borderColor: COLORS.emerald,
+    backgroundColor: COLORS.emeraldSoft,
+  },
+  dropdownTriggerLeft: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  dropdownTriggerTitle: {
     fontSize: 13,
     fontWeight: '800',
     color: COLORS.text,
   },
-  dateInputsRow: {
+  dropdownTriggerSub: {
+    fontSize: 11,
+    color: COLORS.textSecondary,
+    marginTop: 2,
+    fontWeight: '600',
+  },
+  dropdownMenu: {
+    backgroundColor: COLORS.surface,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: COLORS.borderStrong,
+    overflow: 'hidden',
+  },
+  dropdownOptionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.surfaceAlt,
+    gap: 8,
+  },
+  dropdownOptionRowActive: {
+    backgroundColor: COLORS.emeraldSoft,
+  },
+  dropdownOptionTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: COLORS.text,
+  },
+  dropdownOptionTitleActive: {
+    color: '#065F46',
+    fontWeight: '800',
+  },
+  dropdownOptionSub: {
+    fontSize: 11,
+    color: COLORS.textSecondary,
+    marginTop: 1,
+  },
+  dropdownOptionSubActive: {
+    color: COLORS.emerald,
+    fontWeight: '600',
+  },
+  customDatesSection: {
+    gap: 10,
+  },
+  dateFieldsRow: {
     flexDirection: 'row',
     gap: 10,
   },
-  smallLabel: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: COLORS.textSecondary,
-    marginBottom: 4,
-  },
-  dateInput: {
+  calendarFieldBox: {
+    flex: 1,
+    backgroundColor: COLORS.background,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     borderWidth: 1,
     borderColor: COLORS.borderStrong,
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    fontSize: 12,
+    gap: 4,
+  },
+  calendarFieldBoxActive: {
+    borderColor: COLORS.emerald,
+    backgroundColor: COLORS.emeraldSoft,
+  },
+  calendarFieldLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: COLORS.textMuted,
+    letterSpacing: 0.4,
+  },
+  calendarFieldValueRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  calendarFieldValue: {
+    fontSize: 13,
+    fontWeight: '800',
     color: COLORS.text,
+  },
+  calendarFieldValueActive: {
+    color: '#065F46',
+  },
+  calendarCard: {
     backgroundColor: COLORS.background,
-  },
-  presetRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  presetChip: {
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 6,
-    backgroundColor: COLORS.surfaceAlt,
+    borderRadius: 14,
+    padding: 12,
     borderWidth: 1,
     borderColor: COLORS.border,
+    gap: 8,
   },
-  presetChipText: {
-    fontSize: 11,
+  calendarHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  calendarNavBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    backgroundColor: COLORS.surface,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  calendarMonthTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: COLORS.text,
+  },
+  calendarEditingHint: {
+    fontSize: 10,
     fontWeight: '600',
-    color: COLORS.textSecondary,
+    color: COLORS.emerald,
+    marginTop: 1,
   },
-  statusFilterRow: {
+  calendarWeekdaysRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    paddingTop: 4,
+    justifyContent: 'space-between',
+    paddingVertical: 4,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
   },
-  statusFilterChip: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 20,
+  calendarWeekdayText: {
+    flex: 1,
+    textAlign: 'center',
+    fontSize: 10,
+    fontWeight: '800',
+    color: COLORS.textMuted,
+  },
+  calendarGrid: {
+    gap: 4,
+  },
+  calendarWeekRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  calendarDayCell: {
+    flex: 1,
+    height: 32,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginHorizontal: 1,
+  },
+  calendarDayCellInRange: {
+    backgroundColor: COLORS.emeraldSoft,
+  },
+  calendarDayCellEndpoint: {
+    backgroundColor: COLORS.emerald,
+  },
+  calendarDayText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: COLORS.text,
+  },
+  calendarDayTextInRange: {
+    color: '#065F46',
+    fontWeight: '800',
+  },
+  calendarDayTextEndpoint: {
+    color: COLORS.white,
+    fontWeight: '900',
+  },
+  modalActionsRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 4,
+  },
+  modalResetBtn: {
+    flex: 1,
+    paddingVertical: 11,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: COLORS.border,
+    borderColor: COLORS.borderStrong,
+    alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: COLORS.background,
   },
-  statusFilterChipActive: {
-    backgroundColor: COLORS.primary,
-    borderColor: COLORS.primary,
-  },
-  statusFilterText: {
-    fontSize: 11,
+  modalResetBtnText: {
+    fontSize: 12,
     fontWeight: '700',
     color: COLORS.textSecondary,
   },
-  statusFilterTextActive: {
+  modalApplyBtn: {
+    flex: 1.4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 11,
+    borderRadius: 10,
+    backgroundColor: COLORS.emerald,
+  },
+  modalApplyBtnText: {
+    fontSize: 13,
+    fontWeight: '800',
     color: COLORS.white,
   },
   invoiceCard: {
     backgroundColor: COLORS.surface,
-    borderRadius: 14,
-    padding: 14,
+    borderRadius: 16,
+    padding: 16,
     borderWidth: 1,
     borderColor: COLORS.border,
-    gap: 12,
+    gap: 14,
   },
   invoiceHeader: {
     flexDirection: 'row',
@@ -1221,21 +2155,21 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   invoicePeriod: {
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: '800',
     color: COLORS.text,
   },
   invoiceMeta: {
-    fontSize: 11,
-    color: COLORS.textMuted,
-    marginTop: 2,
+    fontSize: 12,
+    color: COLORS.textSecondary,
+    marginTop: 3,
   },
   statusBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    paddingHorizontal: 9,
-    paddingVertical: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
     borderRadius: 20,
     borderWidth: 1,
   },
@@ -1247,22 +2181,26 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     backgroundColor: COLORS.surfaceAlt,
-    padding: 10,
-    borderRadius: 10,
+    padding: 12,
+    borderRadius: 12,
+    gap: 8,
+  },
+  amountCol: {
+    flex: 1,
   },
   amountSmallLabel: {
     fontSize: 10,
     color: COLORS.textMuted,
-    fontWeight: '600',
+    fontWeight: '700',
   },
   amountBold: {
     fontSize: 14,
     fontWeight: '800',
     color: COLORS.text,
-    marginTop: 2,
+    marginTop: 3,
   },
   subSectionLabel: {
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: '800',
     color: COLORS.textSecondary,
     letterSpacing: 0.5,
@@ -1270,46 +2208,46 @@ const styles = StyleSheet.create({
   itemsListBox: {
     borderWidth: 1,
     borderColor: COLORS.border,
-    borderRadius: 10,
+    borderRadius: 12,
     overflow: 'hidden',
   },
   invoiceItemRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 9,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: COLORS.surfaceAlt,
-    gap: 8,
+    gap: 10,
   },
   invoiceItemLabel: {
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '700',
     color: COLORS.text,
   },
   invoiceItemSub: {
     fontSize: 11,
-    color: COLORS.textMuted,
-    marginTop: 1,
+    color: COLORS.textSecondary,
+    marginTop: 2,
   },
   invoiceItemAmount: {
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '800',
     color: COLORS.text,
   },
   itemMiniBadge: {
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: '700',
     marginTop: 2,
   },
   vouchersBlock: {
     backgroundColor: COLORS.indigoSoft,
-    borderRadius: 10,
-    padding: 10,
+    borderRadius: 14,
+    padding: 14,
     borderWidth: 1,
     borderColor: COLORS.indigoBorder,
-    gap: 8,
+    gap: 10,
   },
   vouchersHeaderRow: {
     flexDirection: 'row',
@@ -1317,12 +2255,12 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   vouchersHeaderTitle: {
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '800',
     color: COLORS.indigo,
   },
   noVouchersText: {
-    fontSize: 11,
+    fontSize: 12,
     color: COLORS.textSecondary,
     fontStyle: 'italic',
   },
@@ -1331,11 +2269,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     backgroundColor: COLORS.surface,
-    padding: 9,
-    borderRadius: 8,
+    padding: 12,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: COLORS.border,
-    gap: 8,
+    gap: 10,
   },
   voucherCode: {
     fontSize: 12,
@@ -1345,21 +2283,21 @@ const styles = StyleSheet.create({
   voucherMeta: {
     fontSize: 11,
     color: COLORS.textSecondary,
-    marginTop: 1,
+    marginTop: 2,
   },
   voucherItemsCovered: {
-    fontSize: 10,
+    fontSize: 11,
     color: COLORS.emerald,
     fontWeight: '600',
-    marginTop: 2,
+    marginTop: 3,
   },
   openFileBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    paddingHorizontal: 9,
-    paddingVertical: 6,
-    borderRadius: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 8,
     backgroundColor: COLORS.emeraldSoft,
     borderWidth: 1,
     borderColor: COLORS.emeraldBorder,
@@ -1373,13 +2311,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
+    gap: 8,
     backgroundColor: COLORS.emerald,
-    paddingVertical: 11,
-    borderRadius: 9,
+    paddingVertical: 12,
+    borderRadius: 10,
   },
   payInvoiceBtnText: {
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '800',
     color: COLORS.white,
   },
@@ -1406,22 +2344,24 @@ const styles = StyleSheet.create({
   },
   emptyCard: {
     backgroundColor: COLORS.surface,
-    borderRadius: 12,
-    padding: 24,
+    borderRadius: 14,
+    padding: 28,
     alignItems: 'center',
     borderWidth: 1,
     borderColor: COLORS.border,
-    gap: 6,
+    gap: 8,
   },
   emptyTitle: {
     fontSize: 15,
     fontWeight: '800',
     color: COLORS.text,
+    textAlign: 'center',
   },
   emptySub: {
     fontSize: 12,
     color: COLORS.textSecondary,
     textAlign: 'center',
+    lineHeight: 18,
   },
   debtItemCard: {
     backgroundColor: COLORS.surface,
@@ -1647,26 +2587,6 @@ const styles = StyleSheet.create({
     color: COLORS.text,
     backgroundColor: COLORS.background,
   },
-  bankChip: {
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: COLORS.borderStrong,
-    backgroundColor: COLORS.background,
-  },
-  bankChipActive: {
-    backgroundColor: COLORS.emerald,
-    borderColor: COLORS.emerald,
-  },
-  bankChipText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: COLORS.textSecondary,
-  },
-  bankChipTextActive: {
-    color: COLORS.white,
-  },
   filePickerBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1702,89 +2622,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '800',
     color: COLORS.white,
-  },
-  emailRuleCard: {
-    backgroundColor: COLORS.surface,
-    borderRadius: 12,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    gap: 12,
-  },
-  emailRuleHeader: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 10,
-  },
-  emailIconBox: {
-    width: 38,
-    height: 38,
-    borderRadius: 10,
-    backgroundColor: COLORS.emeraldSoft,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  emailRuleTitle: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: COLORS.text,
-  },
-  emailRuleDesc: {
-    fontSize: 11,
-    color: COLORS.textSecondary,
-    marginTop: 3,
-    lineHeight: 16,
-  },
-  triggerEmailBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    backgroundColor: COLORS.emerald,
-    paddingVertical: 10,
-    borderRadius: 8,
-  },
-  triggerEmailBtnText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: COLORS.white,
-  },
-  emailPreviewCard: {
-    backgroundColor: COLORS.surface,
-    borderRadius: 12,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: COLORS.indigoBorder,
-    gap: 6,
-  },
-  emailPreviewTag: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: COLORS.indigo,
-    letterSpacing: 0.5,
-  },
-  emailPreviewLine: {
-    fontSize: 12,
-    color: COLORS.text,
-  },
-  emailPreviewDivider: {
-    height: 1,
-    backgroundColor: COLORS.border,
-    marginVertical: 4,
-  },
-  emailPreviewItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingVertical: 2,
-  },
-  emailPreviewItemText: {
-    fontSize: 11,
-    color: COLORS.textSecondary,
-  },
-  emailPreviewItemAmount: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: COLORS.text,
   },
 });
 

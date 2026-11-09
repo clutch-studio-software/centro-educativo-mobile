@@ -388,11 +388,6 @@ const styles = StyleSheet.create({
     padding: 24,
     gap: 10,
   },
-  loadingSubText: {
-    fontSize: 12,
-    color: COLORS.textSecondary,
-    textAlign: 'center',
-  },
   noStudentsTitle: {
     fontSize: 16,
     fontWeight: '800',
