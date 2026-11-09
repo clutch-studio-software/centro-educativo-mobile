@@ -216,11 +216,6 @@ const styles = StyleSheet.create({
     color: COLORS.textSecondary,
     letterSpacing: 0.6,
   },
-  helperText: {
-    fontSize: 11,
-    color: COLORS.accent,
-    fontWeight: '600',
-  },
   selectorTrigger: {
     flexDirection: 'row',
     alignItems: 'center',
