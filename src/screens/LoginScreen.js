@@ -40,10 +40,10 @@ const LoginScreen = () => {
         err?.code === 'auth/invalid-credential' ||
         err?.message?.includes('invalid-credential')
       ) {
-        setLoginError('Credenciales inválidas. Verifica tu ID o correo.');
+        setLoginError('Usuario o contraseña incorrectos. Por favor revise sus credenciales.');
       } else {
         setLoginError(
-          err?.message || 'Error al iniciar sesión. Revisa tus credenciales.'
+          err?.message || 'Usuario o contraseña incorrectos. Por favor revise sus credenciales.'
         );
       }
     } finally {

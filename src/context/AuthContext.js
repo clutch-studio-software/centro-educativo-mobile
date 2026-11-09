@@ -12,7 +12,39 @@ import { doc, getDoc } from 'firebase/firestore';
 import { auth, db, FUNCTIONS_BASE_URL } from '../services/firebase';
 
 const STORAGE_USER_KEY = '@educar_transformar_mobile_user';
+const GENERIC_AUTH_ERROR_MSG =
+  'Usuario o contraseña incorrectos. Por favor revise sus credenciales.';
 const AuthContext = createContext(null);
+
+/**
+ * Valida si el rol institucional está habilitado para acceder a la aplicación móvil.
+ * Exclusivamente padres/tutores y estudiantes tienen permitido el acceso móvil.
+ */
+export const isAllowedMobileRole = (role) => {
+  if (!role) return false;
+  const normalized = String(role).trim().toLowerCase();
+
+  // Bloqueo explícito de roles administrativos y docentes
+  if (
+    normalized.includes('docente') ||
+    normalized.includes('profesor') ||
+    normalized.includes('staff') ||
+    normalized.includes('admin') ||
+    normalized.includes('directiv') ||
+    normalized.includes('preceptor') ||
+    normalized.includes('enferm')
+  ) {
+    return false;
+  }
+
+  return (
+    normalized.includes('padre') ||
+    normalized.includes('tutor') ||
+    normalized.includes('madre') ||
+    normalized.includes('estudiante') ||
+    normalized.includes('alumno')
+  );
+};
 
 /**
  * Genera formato alternativo de contraseña si el input corresponde a un DNI
@@ -48,7 +80,7 @@ const fetchUserProfile = async (firebaseUser, claimsRole) => {
   if (userSnap.exists()) {
     const data = userSnap.data();
     return {
-      role: claimsRole || data.role || 'Padre',
+      role: data.role || claimsRole || null,
       profileData: data,
     };
   }
@@ -63,7 +95,7 @@ const fetchUserProfile = async (firebaseUser, claimsRole) => {
   }
 
   return {
-    role: claimsRole || 'Padre',
+    role: claimsRole || null,
     profileData: {},
   };
 };
@@ -89,18 +121,47 @@ const loginStudentViaCloudFunction = async (cleanId, rawPwd) => {
   }
 
   if (!response.ok) {
-    let errorMessage = 'Credenciales de alumno incorrectas.';
+    let errorMessage = GENERIC_AUTH_ERROR_MSG;
     try {
       const errData = await response.json();
       if (errData?.error) errorMessage = errData.error;
     } catch (_err) {
-      // Usar mensaje de error por defecto
+      // Usar mensaje genérico
     }
     throw new Error(errorMessage);
   }
 
   const { customToken } = await response.json();
   return signInWithCustomToken(auth, customToken);
+};
+
+/**
+ * Login de correo y contraseña con tolerancia de formato DNI (puntos <-> sin puntos).
+ */
+const loginWithEmailAndDniFallback = async (cleanId, rawPwd) => {
+  try {
+    return await signInWithEmailAndPassword(auth, cleanId, rawPwd);
+  } catch (authError) {
+    const isCredentialError =
+      authError?.code === 'auth/invalid-credential' ||
+      authError?.code === 'auth/wrong-password' ||
+      authError?.message?.includes('INVALID_LOGIN_CREDENTIALS');
+
+    if (!isCredentialError) {
+      throw new Error(authError?.message || 'Error al iniciar sesión en Firebase Auth.');
+    }
+
+    const alternatePassword = buildAlternateDniPassword(rawPwd);
+    if (alternatePassword && alternatePassword !== rawPwd) {
+      try {
+        return await signInWithEmailAndPassword(auth, cleanId, alternatePassword);
+      } catch (_retryErr) {
+        // Continuar con el error genérico si falla el formato alternativo
+      }
+    }
+
+    throw new Error(GENERIC_AUTH_ERROR_MSG);
+  }
 };
 
 export const AuthProvider = ({ children }) => {
@@ -114,7 +175,12 @@ export const AuthProvider = ({ children }) => {
       try {
         const cached = await AsyncStorage.getItem(STORAGE_USER_KEY);
         if (cached && mounted && !auth.currentUser) {
-          setUser(JSON.parse(cached));
+          const parsed = JSON.parse(cached);
+          if (isAllowedMobileRole(parsed?.role)) {
+            setUser(parsed);
+          } else {
+            await AsyncStorage.removeItem(STORAGE_USER_KEY);
+          }
         }
       } catch (_err) {
         // Ignorar error de lectura de caché local
@@ -138,6 +204,13 @@ export const AuthProvider = ({ children }) => {
         const studentId = idTokenResult.claims.studentId || null;
 
         const { role, profileData } = await fetchUserProfile(firebaseUser, claimsRole);
+
+        if (!isAllowedMobileRole(role)) {
+          await signOut(auth);
+          setUser(null);
+          await AsyncStorage.removeItem(STORAGE_USER_KEY);
+          return;
+        }
 
         const loggedUser = {
           uid: firebaseUser.uid,
@@ -181,36 +254,28 @@ export const AuthProvider = ({ children }) => {
       !role || role === 'Estudiante' || role === 'Estudiante/Tutor' || role === 'Padre';
     const isStudentLegajo = isStudentOrTutor && !cleanId.includes('@');
 
+    let userCredential;
     if (isStudentLegajo) {
-      return loginStudentViaCloudFunction(cleanId, rawPwd);
+      userCredential = await loginStudentViaCloudFunction(cleanId, rawPwd);
+    } else {
+      userCredential = await loginWithEmailAndDniFallback(cleanId, rawPwd);
     }
 
-    // Login de Padre / Tutor / Staff con tolerancia automática de formato DNI (sin puntos <-> con puntos)
-    try {
-      return await signInWithEmailAndPassword(auth, cleanId, rawPwd);
-    } catch (authError) {
-      const isCredentialError =
-        authError?.code === 'auth/invalid-credential' ||
-        authError?.code === 'auth/wrong-password' ||
-        authError?.message?.includes('INVALID_LOGIN_CREDENTIALS');
+    const firebaseUser = userCredential?.user || auth.currentUser;
+    if (firebaseUser) {
+      const idTokenResult = await firebaseUser.getIdTokenResult(true);
+      const claimsRole = idTokenResult.claims?.role || null;
+      const { role: resolvedRole } = await fetchUserProfile(firebaseUser, claimsRole);
 
-      if (!isCredentialError) {
-        throw new Error(authError?.message || 'Error al iniciar sesión en Firebase Auth.');
+      if (!isAllowedMobileRole(resolvedRole)) {
+        await signOut(auth);
+        setUser(null);
+        await AsyncStorage.removeItem(STORAGE_USER_KEY);
+        throw new Error(GENERIC_AUTH_ERROR_MSG);
       }
-
-      const alternatePassword = buildAlternateDniPassword(rawPwd);
-      if (alternatePassword && alternatePassword !== rawPwd) {
-        try {
-          return await signInWithEmailAndPassword(auth, cleanId, alternatePassword);
-        } catch (_retryErr) {
-          // Si falla el reintento con formato alternativo, emitir mensaje explicativo
-        }
-      }
-
-      throw new Error(
-        'Correo electrónico o contraseña incorrectos. Recuerde que su clave inicial por defecto es su número de DNI.'
-      );
     }
+
+    return userCredential;
   }, []);
 
   /**

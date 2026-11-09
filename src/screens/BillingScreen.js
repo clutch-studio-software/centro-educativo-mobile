@@ -408,7 +408,7 @@ const BillingScreen = ({
             <View style={{ flex: 1 }}>
               <Text style={styles.invoicePeriod}>{inv.period}</Text>
               <Text style={styles.invoiceMeta}>
-                Vencimiento: {inv.dueDate} · ID: {inv.id}
+                Vencimiento: {inv.dueDate}
               </Text>
             </View>
             {renderStatusBadge(inv.status, inv.statusLabel)}

@@ -1,14 +1,12 @@
 import React, { useState } from 'react';
 import {
-  SafeAreaView,
   View,
   Text,
   TouchableOpacity,
   ActivityIndicator,
-  StatusBar as RNStatusBar,
-  Platform,
   StyleSheet,
 } from 'react-native';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from './src/theme/colors';
@@ -290,9 +288,11 @@ const MobilePortalShell = () => {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <MobilePortalShell />
-    </AuthProvider>
+    <SafeAreaProvider>
+      <AuthProvider>
+        <MobilePortalShell />
+      </AuthProvider>
+    </SafeAreaProvider>
   );
 }
 
@@ -300,7 +300,6 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: COLORS.primary,
-    paddingTop: Platform.OS === 'android' ? RNStatusBar.currentHeight || 0 : 0,
   },
   centeredScreen: {
     flex: 1,
