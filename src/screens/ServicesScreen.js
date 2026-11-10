@@ -16,7 +16,6 @@ import {
   canCancelServiceToday,
   calculateMonthlyProportional,
   getTransportRouteOccupancy,
-  checkScheduleConflict,
   matchTransportRoute,
   formatDateDisplay,
 } from '../utils/subscriptionRules';
@@ -34,32 +33,19 @@ import {
   getRouteMonthlyPrice,
   getSportMonthlyPrice,
 } from '../services/billingMobileService';
+import SportDetailModal from '../components/SportDetailModal';
 
-const resolveCancellationPolicyHint = ({ isScheduledCancel, bajaProgramada, canCancelNow }) => {
-  if (isScheduledCancel) {
-    return `Baja programada para el ${formatDateDisplay(bajaProgramada)}`;
-  }
-  if (canCancelNow) {
-    return 'Baja inmediata disponible hoy (mismo día de alta)';
-  }
-  return 'Baja diferida al 1º del próximo mes';
-};
-
-const resolveWithdrawButtonText = ({ isScheduledCancel, bajaProgramada, canCancelNow }) => {
-  if (isScheduledCancel) {
-    return `Baja ya solicitada (${formatDateDisplay(bajaProgramada)})`;
-  }
-  if (canCancelNow) {
-    return 'Cancelar Inscripción Hoy (Inmediata)';
-  }
-  return 'Solicitar Baja para el Próximo Mes';
-};
-
-const resolveSportEnrollButtonText = ({ isFull, conflict, reachedMaxSports, sportName }) => {
-  if (isFull) return 'Cupo Completo';
-  if (conflict) return 'Bloqueado por Superposición Horaria';
-  if (reachedMaxSports) return 'Máximo 2 Deportes Alcanzado';
-  return `Inscribir en ${sportName}`;
+const resolveSportIcon = (name = '') => {
+  const n = String(name).toLowerCase();
+  if (n.includes('fútbol') || n.includes('futbol')) return 'football-outline';
+  if (n.includes('básquet') || n.includes('basquet')) return 'basketball-outline';
+  if (n.includes('vóley') || n.includes('voley') || n.includes('voleibol')) return 'tennisball-outline';
+  if (n.includes('natación') || n.includes('natacion')) return 'water-outline';
+  if (n.includes('marcial') || n.includes('taekwondo') || n.includes('karate')) return 'shield-outline';
+  if (n.includes('ajedrez')) return 'extension-puzzle-outline';
+  if (n.includes('danza') || n.includes('baile')) return 'musical-notes-outline';
+  if (n.includes('atletismo') || n.includes('running')) return 'fitness-outline';
+  return 'trophy-outline';
 };
 
 const resolveRouteEnrollButtonText = ({ isCurrentRoute, estaLleno, routeId }) => {
@@ -88,174 +74,51 @@ const resolveDiningButtonText = ({ bajaSolicitada, bajaProgramada, canCancelToda
   return 'Solicitar Baja para el Próximo Mes';
 };
 
-const resolveSportOccupiedCount = (disc, student, isEnrolled) => {
-  const inscriptos = Array.isArray(disc.inscriptos) ? disc.inscriptos : [];
-  const studentId = String(student?.id || '').trim();
-  const inRoster =
-    Boolean(studentId) &&
-    inscriptos.some((ins) => String(ins?.id || ins?.studentId || '').trim() === studentId);
-  const baseOccupied = Math.max(Number(disc.cupoOcupado) || 0, inscriptos.length);
-  return isEnrolled && !inRoster ? baseOccupied + 1 : baseOccupied;
-};
-
 const SportCardItem = ({
   disc,
   student,
-  enrolledDisciplines,
   tariffsConfig,
-  isStudentRole,
-  isBusy,
-  onEnroll,
-  onWithdraw,
+  onPress,
 }) => {
   const isEnrolled = isStudentEnrolledInDiscipline(student, disc);
-  const subInfo = student.deportesSuscripciones?.[disc.id] || {};
-  const startDate = subInfo.fechaInicio || student.deporteFechaInicio;
-  const canCancelNow = canCancelServiceToday(startDate);
-  const isScheduledCancel = Boolean(subInfo.bajaSolicitada);
-
   const monthlyRate = getSportMonthlyPrice(disc, tariffsConfig);
-  const propInfo = calculateMonthlyProportional({
-    startDate: isEnrolled ? startDate : new Date(),
-    monthlyRate,
-  });
-
-  const conflict = !isEnrolled
-    ? checkScheduleConflict(enrolledDisciplines, disc)
-    : null;
-  const cupoMax = Number(disc.cupoMax) || 25;
-  const cupoOcupado = resolveSportOccupiedCount(disc, student, isEnrolled);
-  const isFull = cupoOcupado >= cupoMax && !isEnrolled;
-  const reachedMaxSports = enrolledDisciplines.length >= 2 && !isEnrolled;
-
-  const cancellationHint = resolveCancellationPolicyHint({
-    isScheduledCancel,
-    bajaProgramada: subInfo.bajaProgramada,
-    canCancelNow,
-  });
-
-  const withdrawText = resolveWithdrawButtonText({
-    isScheduledCancel,
-    bajaProgramada: subInfo.bajaProgramada,
-    canCancelNow,
-  });
-
-  const enrollText = resolveSportEnrollButtonText({
-    isFull,
-    conflict,
-    reachedMaxSports,
-    sportName: disc.nombre,
-  });
+  const iconName = resolveSportIcon(disc.nombre);
 
   return (
-    <View style={[styles.serviceCard, isEnrolled && styles.serviceCardEnrolled]}>
-      <View style={styles.sportTopRow}>
-        <View style={styles.emojiBox}>
-          <Text style={{ fontSize: 20 }}>{disc.emoji || '🏅'}</Text>
+    <TouchableOpacity
+      style={[styles.sportCompactCard, isEnrolled && styles.sportCompactCardEnrolled]}
+      onPress={() => onPress(disc)}
+      activeOpacity={0.75}
+    >
+      <View style={styles.sportCompactLeft}>
+        <View style={[styles.sportCompactIcon, isEnrolled && styles.sportCompactIconEnrolled]}>
+          <Ionicons
+            name={iconName}
+            size={20}
+            color={isEnrolled ? COLORS.emerald : COLORS.accent}
+          />
         </View>
-        <View style={{ flex: 1 }}>
+
+        <View style={styles.sportCompactInfo}>
           <View style={styles.titleWithBadge}>
-            <Text style={styles.sportName}>{disc.nombre}</Text>
+            <Text style={styles.sportCompactTitle}>{disc.nombre}</Text>
             {isEnrolled && (
               <View style={styles.activePill}>
                 <Text style={styles.activePillText}>INSCRIPTO</Text>
               </View>
             )}
           </View>
-          <Text style={styles.sportTeacher}>
-            Profesor responsable: {disc.profesor?.nombre || 'Docente asignado'}
-          </Text>
-          <Text style={styles.sportSchedule}>
-            {disc.horario} · {disc.lugar}
-          </Text>
-        </View>
-        <View style={{ alignItems: 'flex-end' }}>
-          <Text style={styles.priceTag}>{formatCurrencyARS(monthlyRate)}/mes</Text>
-          <Text style={styles.propSmallTag}>
-            1º mes prop.: {propInfo.formattedProportional}
-          </Text>
         </View>
       </View>
 
-      <View style={styles.metaStrip}>
-        <Text style={styles.metaStripText}>
-          Nivel: {disc.niveles || 'Todos'}
+      <View style={styles.sportCompactRight}>
+        <Text style={styles.sportCompactPrice}>
+          {formatCurrencyARS(monthlyRate)}
+          <Text style={styles.sportCompactPriceSub}> / mes</Text>
         </Text>
-        <Text style={styles.metaStripText}>
-          Vacantes: {cupoOcupado}/{cupoMax} ocupadas
-        </Text>
+        <Ionicons name="chevron-forward" size={17} color={COLORS.textMuted} />
       </View>
-
-      {conflict && !isEnrolled && (
-        <View style={styles.conflictBox}>
-          <Ionicons name="warning" size={15} color={COLORS.rose} />
-          <Text style={styles.conflictText}>
-            Conflicto de horario: {conflict.overlapLabel}
-          </Text>
-        </View>
-      )}
-
-      {isEnrolled && (
-        <View style={styles.subscriptionStatusBox}>
-          <Text style={styles.subscriptionStatusText}>
-            Fecha de alta: {formatDateDisplay(startDate)} · {cancellationHint}
-          </Text>
-        </View>
-      )}
-
-      {!isStudentRole && (
-        <View style={styles.cardActionRow}>
-          {isEnrolled ? (
-            <TouchableOpacity
-              style={[
-                styles.withdrawBtn,
-                isScheduledCancel && { opacity: 0.55 },
-              ]}
-              onPress={() => onWithdraw(disc)}
-              disabled={isBusy || isScheduledCancel}
-            >
-              {isBusy ? (
-                <ActivityIndicator size="small" color={COLORS.rose} />
-              ) : (
-                <>
-                  <Ionicons
-                    name="close-circle-outline"
-                    size={16}
-                    color={COLORS.rose}
-                  />
-                  <Text style={styles.withdrawBtnText}>{withdrawText}</Text>
-                </>
-              )}
-            </TouchableOpacity>
-          ) : (
-            <TouchableOpacity
-              style={[
-                styles.enrollBtn,
-                (Boolean(conflict) || isFull || reachedMaxSports) &&
-                  styles.enrollBtnDisabled,
-              ]}
-              onPress={() => onEnroll(disc)}
-              disabled={
-                isBusy || Boolean(conflict) || isFull || reachedMaxSports
-              }
-            >
-              {isBusy ? (
-                <ActivityIndicator size="small" color={COLORS.white} />
-              ) : (
-                <>
-                  <Ionicons
-                    name="add-circle-outline"
-                    size={16}
-                    color={COLORS.white}
-                  />
-                  <Text style={styles.enrollBtnText}>{enrollText}</Text>
-                </>
-              )}
-            </TouchableOpacity>
-          )}
-        </View>
-      )}
-    </View>
+    </TouchableOpacity>
   );
 };
 
@@ -523,6 +386,7 @@ const ServicesScreen = ({
   const [activeServiceTab, setActiveServiceTab] = useState('sports'); // 'sports' | 'transport' | 'dining'
   const [processingKey, setProcessingKey] = useState(null);
   const [diningNotes, setDiningNotes] = useState(student?.observacionesComedor || '');
+  const [selectedDisciplineForDetail, setSelectedDisciplineForDetail] = useState(null);
 
   const { diningPrice } = useMemo(
     () => resolveOfficialTariffs(tariffsConfig),
@@ -534,6 +398,15 @@ const ServicesScreen = ({
     if (!student) return [];
     return allDisciplines.filter((d) => isStudentEnrolledInDiscipline(student, d));
   }, [student, allDisciplines]);
+
+  // Mantener la disciplina abierta sincronizada si cambian los datos del estudiante
+  const activeDisciplineInModal = useMemo(() => {
+    if (!selectedDisciplineForDetail) return null;
+    return (
+      allDisciplines.find((d) => String(d.id) === String(selectedDisciplineForDetail.id)) ||
+      selectedDisciplineForDetail
+    );
+  }, [allDisciplines, selectedDisciplineForDetail]);
 
   // Estado de Transporte del alumno
   const studentRoute = useMemo(() => {
@@ -779,31 +652,16 @@ const ServicesScreen = ({
           </Text>
         </View>
 
-        {/* TAB 1: DEPORTES EXTRACURRICULARES (Máx. 2 deportes + Validación de Horarios) */}
+        {/* TAB 1: DEPORTES EXTRACURRICULARES (Cards Limpias con Detalle en Modal) */}
         {activeServiceTab === 'sports' && (
           <View style={styles.sectionWrap}>
-            <View style={styles.sectionHeaderCard}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.sectionTitle}>
-                  Deportes Extracurriculares
-                </Text>
-                <Text style={styles.sectionSub}>
-                  Cada alumno puede inscribirse hasta en 2 deportes simultáneamente sin superposición horaria. Precios diferenciados por disciplina.
-                </Text>
-              </View>
-            </View>
-
             {allDisciplines.map((disc) => (
               <SportCardItem
                 key={disc.id}
                 disc={disc}
                 student={student}
-                enrolledDisciplines={enrolledDisciplines}
                 tariffsConfig={tariffsConfig}
-                isStudentRole={isStudentRole}
-                isBusy={processingKey === `sport-${disc.id}`}
-                onEnroll={handleEnrollSportAction}
-                onWithdraw={handleWithdrawSportAction}
+                onPress={setSelectedDisciplineForDetail}
               />
             ))}
           </View>
@@ -812,17 +670,6 @@ const ServicesScreen = ({
         {/* TAB 2: TRANSPORTE ESCOLAR (4 Recorridos - Mercedes-Benz Sprinter 15 Plazas) */}
         {activeServiceTab === 'transport' && (
           <View style={styles.sectionWrap}>
-            <View style={styles.sectionHeaderCard}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.sectionTitle}>
-                  Servicio de Micros de Traslado (4 Recorridos Oficiales)
-                </Text>
-                <Text style={styles.sectionSub}>
-                  Unidades Mercedes-Benz Sprinter con capacidad máxima de 15 plazas por recorrido y tarifas diferenciadas.
-                </Text>
-              </View>
-            </View>
-
             {studentRoute && (
               <View style={styles.currentTransportBanner}>
                 <View style={{ flex: 1 }}>
@@ -841,7 +688,7 @@ const ServicesScreen = ({
                     </Text>
                   )}
                 </View>
-
+                
                 {!isStudentRole && !student.transporteBajaSolicitada && (
                   <TouchableOpacity
                     style={styles.cancelTransportBtn}
@@ -892,6 +739,20 @@ const ServicesScreen = ({
           </View>
         )}
       </ScrollView>
+
+      {/* Modal Bottom Sheet de Detalle del Deporte */}
+      <SportDetailModal
+        visible={Boolean(activeDisciplineInModal)}
+        discipline={activeDisciplineInModal}
+        student={student}
+        enrolledDisciplines={enrolledDisciplines}
+        tariffsConfig={tariffsConfig}
+        isStudentRole={isStudentRole}
+        isBusy={Boolean(processingKey && processingKey.startsWith('sport-'))}
+        onClose={() => setSelectedDisciplineForDetail(null)}
+        onEnroll={handleEnrollSportAction}
+        onWithdraw={handleWithdrawSportAction}
+      />
     </View>
   );
 };
@@ -900,6 +761,67 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: COLORS.background,
+  },
+  sportCompactCard: {
+    backgroundColor: COLORS.surface,
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  sportCompactCardEnrolled: {
+    borderColor: COLORS.emerald,
+    borderWidth: 1.5,
+    backgroundColor: '#F0FDF4',
+  },
+  sportCompactLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    flex: 1,
+  },
+  sportCompactIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    backgroundColor: COLORS.accentSoft,
+    borderWidth: 1,
+    borderColor: COLORS.accentBorder,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sportCompactIconEnrolled: {
+    backgroundColor: COLORS.emeraldSoft,
+    borderColor: COLORS.emeraldBorder,
+  },
+  sportCompactInfo: {
+    flex: 1,
+    gap: 2,
+  },
+  sportCompactTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: COLORS.text,
+  },
+  sportCompactRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  sportCompactPrice: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: COLORS.emerald,
+  },
+  sportCompactPriceSub: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: COLORS.textSecondary,
   },
   emptyWrap: {
     flex: 1,
@@ -968,28 +890,6 @@ const styles = StyleSheet.create({
   },
   sectionWrap: {
     gap: 12,
-  },
-  sectionHeaderCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: COLORS.surface,
-    padding: 13,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    gap: 10,
-  },
-  sectionTitle: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: COLORS.text,
-  },
-  sectionSub: {
-    fontSize: 11,
-    color: COLORS.textSecondary,
-    marginTop: 2,
-    lineHeight: 15,
   },
   serviceCard: {
     backgroundColor: COLORS.surface,
@@ -1061,35 +961,6 @@ const styles = StyleSheet.create({
     color: COLORS.textSecondary,
     marginTop: 2,
   },
-  metaStrip: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    backgroundColor: COLORS.surfaceAlt,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
-  },
-  metaStripText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: COLORS.textSecondary,
-  },
-  conflictBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: COLORS.roseSoft,
-    borderWidth: 1,
-    borderColor: COLORS.roseBorder,
-    padding: 8,
-    borderRadius: 8,
-  },
-  conflictText: {
-    flex: 1,
-    fontSize: 11,
-    fontWeight: '700',
-    color: COLORS.rose,
-  },
   subscriptionStatusBox: {
     backgroundColor: COLORS.emeraldSoft,
     padding: 8,
@@ -1137,8 +1008,8 @@ const styles = StyleSheet.create({
     color: COLORS.rose,
   },
   currentTransportBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: 'col',
+    alignItems: 'left',
     justifyContent: 'space-between',
     backgroundColor: COLORS.emeraldSoft,
     borderWidth: 1,
@@ -1179,7 +1050,10 @@ const styles = StyleSheet.create({
   cancelTransportBtnText: {
     fontSize: 11,
     fontWeight: '800',
+    paddingVertical: 3,
+    borderRadius: 8,
     color: COLORS.white,
+    textAlign: 'center'
   },
   occupancyBarWrap: {
     gap: 5,
