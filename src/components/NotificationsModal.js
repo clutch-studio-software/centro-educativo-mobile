@@ -73,10 +73,11 @@ const resolveCategoryVisuals = (category) => {
 
 const NotificationItemCard = ({ item, onPressItem }) => {
   const visuals = resolveCategoryVisuals(item.category);
+  const isRead = Boolean(item.isRead || item.read);
 
   return (
     <TouchableOpacity
-      style={[styles.notifCard, !item.isRead && styles.notifCardUnread]}
+      style={[styles.notifCard, !isRead && styles.notifCardUnread]}
       onPress={() => onPressItem?.(item)}
       activeOpacity={0.78}
     >
@@ -94,13 +95,13 @@ const NotificationItemCard = ({ item, onPressItem }) => {
           <Text style={styles.dateText}>{item.dateLabel}</Text>
         </View>
 
-        <Text style={[styles.notifTitle, !item.isRead && styles.notifTitleUnread]}>
+        <Text style={[styles.notifTitle, !isRead && styles.notifTitleUnread]}>
           {item.title}
         </Text>
         <Text style={styles.notifBody}>{item.body}</Text>
       </View>
 
-      {!item.isRead && <View style={styles.unreadDot} />}
+      {!isRead && <View style={styles.unreadDot} />}
     </TouchableOpacity>
   );
 };

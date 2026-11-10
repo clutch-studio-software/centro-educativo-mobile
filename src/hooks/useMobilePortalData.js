@@ -378,12 +378,13 @@ export const useMobilePortalData = (user) => {
       linkedStudents,
       financeReceipts,
       directNotifications,
+      readIds: readNotificationIds,
       readIdsSet: new Set(readNotificationIds),
     });
   }, [user, linkedStudents, financeReceipts, directNotifications, readNotificationIds]);
 
   const unreadNotificationsCount = useMemo(
-    () => notifications.filter((n) => !n.read).length,
+    () => notifications.filter((n) => !n.isRead && !n.read).length,
     [notifications]
   );
 
@@ -400,7 +401,7 @@ export const useMobilePortalData = (user) => {
     notifications.forEach((n) => {
       if (!knownNotificationIdsRef.current.has(n.id)) {
         knownNotificationIdsRef.current.add(n.id);
-        if (!n.read) {
+        if (!n.isRead && !n.read) {
           void triggerInstantPushNotification({
             title: n.title,
             body: n.body,
@@ -428,10 +429,17 @@ export const useMobilePortalData = (user) => {
         return next;
       });
 
-      if (String(notifItem.id).startsWith('fs-notif-')) {
-        const rawDocId = String(notifItem.id).replace('fs-notif-', '');
+      const fsDocId =
+        notifItem.firestoreDocId ||
+        (String(notifItem.id).startsWith('notif-doc-')
+          ? String(notifItem.id).replace('notif-doc-', '')
+          : String(notifItem.id).startsWith('fs-notif-')
+            ? String(notifItem.id).replace('fs-notif-', '')
+            : null);
+
+      if (fsDocId) {
         try {
-          await updateDoc(doc(db, 'notifications', rawDocId), {
+          await updateDoc(doc(db, 'notifications', fsDocId), {
             read: true,
             leida: true,
           });
@@ -474,6 +482,20 @@ export const useMobilePortalData = (user) => {
         void persistReadNotificationIds(uid, merged);
       }
       return merged;
+    });
+
+    notifications.forEach((n) => {
+      const fsDocId =
+        n.firestoreDocId ||
+        (String(n.id).startsWith('notif-doc-')
+          ? String(n.id).replace('notif-doc-', '')
+          : null);
+      if (fsDocId && (!n.isRead || !n.read)) {
+        void updateDoc(doc(db, 'notifications', fsDocId), {
+          read: true,
+          leida: true,
+        }).catch(() => undefined);
+      }
     });
   }, [user?.uid, notifications]);
 

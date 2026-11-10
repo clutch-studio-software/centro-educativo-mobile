@@ -16,11 +16,30 @@ import LoginScreen from './src/screens/LoginScreen';
 import BillingScreen from './src/screens/BillingScreen';
 import ServicesScreen from './src/screens/ServicesScreen';
 import AcademicProfileScreen from './src/screens/AcademicProfileScreen';
-import ChildSelectorBar from './src/components/ChildSelectorBar';
 import ChangePasswordModal from './src/components/ChangePasswordModal';
 import HeaderBurgerMenuModal from './src/components/HeaderBurgerMenuModal';
 import ProfileModal from './src/components/ProfileModal';
 import NotificationsModal from './src/components/NotificationsModal';
+
+const resolveActiveStudentLabel = (
+  isParentRole,
+  linkedStudents,
+  selectedStudentId,
+  effectiveTab,
+  currentStudent
+) => {
+  if (!isParentRole || !Array.isArray(linkedStudents) || linkedStudents.length === 0) {
+    return null;
+  }
+  if (selectedStudentId === 'all' && effectiveTab === 'billing') {
+    return 'Grupo Familiar';
+  }
+  return (
+    currentStudent?.nombreCompleto ||
+    `${currentStudent?.nombre || ''} ${currentStudent?.apellido || ''}`.trim() ||
+    null
+  );
+};
 
 const MobilePortalShell = () => {
   const {
@@ -204,6 +223,14 @@ const MobilePortalShell = () => {
     </View>
   );
 
+  const activeStudentLabel = resolveActiveStudentLabel(
+    isParentRole,
+    linkedStudents,
+    selectedStudentId,
+    effectiveTab,
+    currentStudent
+  );
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar style="light" backgroundColor={COLORS.primary} />
@@ -211,17 +238,26 @@ const MobilePortalShell = () => {
       {/* Top Header Institucional */}
       <View style={styles.topHeader}>
         <View style={styles.brandRow}>
-          <View style={styles.brandIcon}>
-            <Ionicons name="school" size={20} color={COLORS.accent} />
-          </View>
-          <View style={{ flex: 1 }}>
+          <TouchableOpacity
+            style={styles.burgerBtn}
+            onPress={() => setBurgerMenuVisible(true)}
+            accessibilityLabel="Abrir menú lateral"
+          >
+            <Ionicons name="menu" size={22} color={COLORS.white} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={{ flex: 1 }}
+            activeOpacity={0.8}
+            onPress={() => setBurgerMenuVisible(true)}
+          >
             <Text style={styles.brandTitle} numberOfLines={1}>
               {user?.role === 'Padre' ? 'Portal de Padres' : 'Portal de Alumno'}
             </Text>
             <Text style={styles.userSub} numberOfLines={1}>
               {user?.nombre || user?.email}
+              {activeStudentLabel ? ` · ${activeStudentLabel}` : ''}
             </Text>
-          </View>
+          </TouchableOpacity>
         </View>
 
         <View style={styles.headerActions}>
@@ -232,7 +268,7 @@ const MobilePortalShell = () => {
           >
             <Ionicons
               name={unreadNotificationsCount > 0 ? 'notifications' : 'notifications-outline'}
-              size={18}
+              size={19}
               color={unreadNotificationsCount > 0 ? '#FDBA74' : COLORS.white}
             />
             {unreadNotificationsCount > 0 && (
@@ -242,13 +278,6 @@ const MobilePortalShell = () => {
                 </Text>
               </View>
             )}
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.headerBtn}
-            onPress={() => setBurgerMenuVisible(true)}
-            accessibilityLabel="Menú de opciones"
-          >
-            <Ionicons name="menu" size={21} color={COLORS.white} />
           </TouchableOpacity>
         </View>
       </View>
@@ -284,27 +313,21 @@ const MobilePortalShell = () => {
         </View>
       )}
 
-      {/* Selector de Hijos (Multi-Hijo) para Padres/Tutores */}
-      {isParentRole && linkedStudents.length > 0 && (
-        <ChildSelectorBar
-          students={linkedStudents}
-          selectedStudentId={selectedStudentId}
-          onSelectStudent={setSelectedStudentId}
-          showAllOption={effectiveTab === 'billing'}
-        />
-      )}
-
       {/* Contenido Principal */}
       {renderMainContent()}
 
       {/* Barra de Navegación Inferior según Rol */}
       {renderBottomNav()}
 
-      {/* Menú Burger del Header (Mi Perfil, Cambiar Contraseña y Cerrar Sesión) */}
+      {/* Menú Lateral Desplegable desde la Izquierda (Selector de Alumno, Mi Perfil, Cambiar Contraseña y Cerrar Sesión) */}
       <HeaderBurgerMenuModal
         visible={burgerMenuVisible}
         user={user}
         isStudentRole={isStudentRole}
+        students={linkedStudents}
+        selectedStudentId={selectedStudentId}
+        onSelectStudent={setSelectedStudentId}
+        showAllOption={effectiveTab === 'billing'}
         onClose={() => setBurgerMenuVisible(false)}
         onOpenProfile={() => setProfileModalVisible(true)}
         onOpenChangePassword={() => setManualPasswordModal(true)}
@@ -394,13 +417,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
   },
-  brandIcon: {
-    width: 36,
-    height: 36,
+  burgerBtn: {
+    width: 38,
+    height: 38,
     borderRadius: 10,
-    backgroundColor: 'rgba(234,88,12,0.18)',
+    backgroundColor: 'rgba(255,255,255,0.1)',
     borderWidth: 1,
-    borderColor: 'rgba(234,88,12,0.45)',
+    borderColor: 'rgba(255,255,255,0.14)',
     alignItems: 'center',
     justifyContent: 'center',
   },

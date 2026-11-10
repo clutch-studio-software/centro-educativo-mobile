@@ -1,5 +1,13 @@
 import { Platform } from 'react-native';
-import * as Notifications from 'expo-notifications';
+import { isRunningInExpoGo } from 'expo';
+import { setNotificationHandler } from 'expo-notifications/build/NotificationsHandler';
+import {
+  getPermissionsAsync,
+  requestPermissionsAsync,
+} from 'expo-notifications/build/NotificationPermissions';
+import { scheduleNotificationAsync } from 'expo-notifications/build/scheduleNotificationAsync';
+import { setNotificationChannelAsync } from 'expo-notifications/build/setNotificationChannelAsync';
+import { getExpoPushTokenAsync } from 'expo-notifications/build/getExpoPushTokenAsync';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { doc, updateDoc, arrayUnion, serverTimestamp } from 'firebase/firestore';
 import { auth, db } from './firebase';
@@ -7,9 +15,8 @@ import { auth, db } from './firebase';
 const READ_NOTIFICATIONS_STORAGE_KEY = '@educar_transformar_read_notifications_v1';
 
 try {
-  Notifications.setNotificationHandler({
+  setNotificationHandler({
     handleNotification: async () => ({
-      shouldShowAlert: true,
       shouldShowBanner: true,
       shouldShowList: true,
       shouldPlaySound: true,
@@ -22,12 +29,12 @@ try {
 
 /**
  * Solicita permisos de notificaciones en el dispositivo, configura el canal Android
- * y registra el ExpoPushToken en el documento del usuario en Firestore.
+ * y registra el ExpoPushToken en el documento del usuario en Firestore (cuando no corre en Expo Go).
  */
 export const registerForPushNotificationsAsync = async (user) => {
   try {
     if (Platform.OS === 'android') {
-      await Notifications.setNotificationChannelAsync('institutional-alerts', {
+      await setNotificationChannelAsync('institutional-alerts', {
         name: 'Avisos Institucionales',
         importance: 4,
         vibrationPattern: [0, 250, 250, 250],
@@ -35,11 +42,11 @@ export const registerForPushNotificationsAsync = async (user) => {
       });
     }
 
-    const existingPerms = await Notifications.getPermissionsAsync();
+    const existingPerms = await getPermissionsAsync();
     let finalStatus = existingPerms.status;
 
     if (finalStatus !== 'granted') {
-      const requested = await Notifications.requestPermissionsAsync();
+      const requested = await requestPermissionsAsync();
       finalStatus = requested.status;
     }
 
@@ -47,9 +54,15 @@ export const registerForPushNotificationsAsync = async (user) => {
       return null;
     }
 
+    // En Expo Go (SDK 53+) las notificaciones remotas están deshabilitadas;
+    // solo se usan notificaciones locales en tiempo real (scheduleNotificationAsync).
+    if (isRunningInExpoGo()) {
+      return null;
+    }
+
     let pushToken = null;
     try {
-      const tokenResponse = await Notifications.getExpoPushTokenAsync();
+      const tokenResponse = await getExpoPushTokenAsync();
       pushToken = tokenResponse?.data || null;
     } catch (_tokenErr) {
       // En emulador sin projectId de EAS configurado, las notificaciones locales siguen operativas
@@ -83,7 +96,7 @@ export const registerForPushNotificationsAsync = async (user) => {
  */
 export const triggerInstantPushNotification = async ({ title, body, data = {} }) => {
   try {
-    await Notifications.scheduleNotificationAsync({
+    await scheduleNotificationAsync({
       content: {
         title: String(title || 'Aviso Institucional'),
         body: String(body || ''),
@@ -144,6 +157,7 @@ const collectStudentAttendanceNotifications = (student, studentName, readSet, ou
       body: `${item.fecha || 'Fecha reciente'} · ${item.motivo || 'Registro de asistencia escolar'}`,
       dateLabel: item.fecha || 'Reciente',
       isRead,
+      read: isRead,
     });
 
     if (item.justificacion) {
@@ -158,6 +172,7 @@ const collectStudentAttendanceNotifications = (student, studentName, readSet, ou
       if (isReviewed) {
         const justNotifId = `notif-just-${student.id}-${itemId}-${justLower}`;
         const isRejected = justLower.includes('rechaz') || justLower.includes('observ');
+        const isJustRead = readSet.has(justNotifId);
         outList.push({
           id: justNotifId,
           category: isRejected ? 'justification_rejected' : 'justification_approved',
@@ -173,7 +188,8 @@ const collectStudentAttendanceNotifications = (student, studentName, readSet, ou
               : ''
           }`,
           dateLabel: item.fecha || 'Reciente',
-          isRead: readSet.has(justNotifId),
+          isRead: isJustRead,
+          read: isJustRead,
         });
       }
     }
@@ -204,6 +220,7 @@ const collectStudentNursingNotifications = (student, studentName, readSet, outLi
       body: `${care} · ${enf.profesional || enf.autor || 'Gabinete de Salud'}`,
       dateLabel: enf.fecha || 'Reciente',
       isRead,
+      read: isRead,
     });
   });
 };
@@ -232,6 +249,7 @@ const collectStudentPreceptoriaNotifications = (student, studentName, readSet, o
       body: detail,
       dateLabel: prec.fecha || 'Reciente',
       isRead,
+      read: isRead,
     });
   });
 };
@@ -266,6 +284,7 @@ const collectVoucherStatusNotifications = (
     const status = String(r.status || '').toLowerCase();
     if (status === 'aprobado' || status === 'conciliado') {
       const notifId = `notif-vch-approved-${r.id}-${r.receiptNumber || 'ok'}`;
+      const isRead = readSet.has(notifId);
       outList.push({
         id: notifId,
         category: 'voucher_approved',
@@ -276,11 +295,13 @@ const collectVoucherStatusNotifications = (
           r.receiptNumber ? ` (Recibo ${r.receiptNumber})` : ''
         }.`,
         dateLabel: r.uploadDate || r.month || 'Reciente',
-        isRead: readSet.has(notifId),
+        isRead,
+        read: isRead,
       });
     } else if (status === 'rechazado') {
       const reasonKey = String(r.rejectionReason || 'obs').slice(0, 24);
       const notifId = `notif-vch-rejected-${r.id}-${reasonKey}`;
+      const isRead = readSet.has(notifId);
       outList.push({
         id: notifId,
         category: 'voucher_rejected',
@@ -291,7 +312,8 @@ const collectVoucherStatusNotifications = (
           ? `Motivo: ${r.rejectionReason}. Puede adjuntar documentación respaldatoria.`
           : 'El comprobante fue observado por Administración. Revise el detalle del mes.',
         dateLabel: r.uploadDate || r.month || 'Reciente',
-        isRead: readSet.has(notifId),
+        isRead,
+        read: isRead,
       });
     }
   });
@@ -311,6 +333,7 @@ const collectDirectFirestoreNotifications = (
     if (!forUser && !forStudent) return;
 
     const notifId = `notif-doc-${n.id}`;
+    const isRead = Boolean(n.read || n.leida) || readSet.has(notifId);
     outList.push({
       id: notifId,
       firestoreDocId: n.id,
@@ -320,7 +343,8 @@ const collectDirectFirestoreNotifications = (
       title: n.title || n.titulo || 'Notificación Institucional',
       body: n.body || n.mensaje || n.detalle || '',
       dateLabel: n.dateLabel || n.fecha || 'Reciente',
-      isRead: Boolean(n.read) || readSet.has(notifId),
+      isRead,
+      read: isRead,
     });
   });
 };
@@ -335,8 +359,12 @@ export const buildInstitutionalNotificationsFeed = ({
   financeReceipts = [],
   directNotifications = [],
   readIds = [],
+  readIdsSet,
 }) => {
-  const readSet = new Set(readIds);
+  const readSet =
+    readIdsSet instanceof Set
+      ? readIdsSet
+      : new Set(Array.isArray(readIds) ? readIds : []);
   const studentIdsSet = new Set((linkedStudents || []).map((s) => String(s.id)));
   const notifications = [];
 
