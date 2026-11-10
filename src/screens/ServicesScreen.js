@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo } from "react";
 import {
   View,
   Text,
@@ -7,19 +7,18 @@ import {
   TextInput,
   ActivityIndicator,
   StyleSheet,
-} from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import { COLORS, formatCurrencyARS } from '../theme/colors';
+} from "react-native";
+import { Ionicons } from "@expo/vector-icons";
+import { COLORS, formatCurrencyARS } from "../theme/colors";
 import {
   TRANSPORT_ROUTES,
   SPRINTER_STANDARD_CAPACITY,
   canCancelServiceToday,
   calculateMonthlyProportional,
   getTransportRouteOccupancy,
-  checkScheduleConflict,
   matchTransportRoute,
   formatDateDisplay,
-} from '../utils/subscriptionRules';
+} from "../utils/subscriptionRules";
 import {
   enrollStudentInTransport,
   cancelStudentTransport,
@@ -28,234 +27,118 @@ import {
   enrollStudentInSport,
   withdrawStudentFromSport,
   isStudentEnrolledInDiscipline,
-} from '../services/servicesMobileService';
+} from "../services/servicesMobileService";
 import {
   resolveOfficialTariffs,
   getRouteMonthlyPrice,
   getSportMonthlyPrice,
-} from '../services/billingMobileService';
+} from "../services/billingMobileService";
+import SportDetailModal from "../components/SportDetailModal";
 
-const resolveCancellationPolicyHint = ({ isScheduledCancel, bajaProgramada, canCancelNow }) => {
-  if (isScheduledCancel) {
-    return `Baja programada para el ${formatDateDisplay(bajaProgramada)}`;
-  }
-  if (canCancelNow) {
-    return 'Baja inmediata disponible hoy (mismo día de alta)';
-  }
-  return 'Baja diferida al 1º del próximo mes';
+const resolveSportIcon = (name = "") => {
+  const n = String(name).toLowerCase();
+  if (n.includes("fútbol") || n.includes("futbol")) return "football-outline";
+  if (n.includes("básquet") || n.includes("basquet"))
+    return "basketball-outline";
+  if (n.includes("vóley") || n.includes("voley") || n.includes("voleibol"))
+    return "tennisball-outline";
+  if (n.includes("natación") || n.includes("natacion")) return "water-outline";
+  if (n.includes("marcial") || n.includes("taekwondo") || n.includes("karate"))
+    return "shield-outline";
+  if (n.includes("ajedrez")) return "extension-puzzle-outline";
+  if (n.includes("danza") || n.includes("baile"))
+    return "musical-notes-outline";
+  if (n.includes("atletismo") || n.includes("running"))
+    return "fitness-outline";
+  return "trophy-outline";
 };
 
-const resolveWithdrawButtonText = ({ isScheduledCancel, bajaProgramada, canCancelNow }) => {
-  if (isScheduledCancel) {
-    return `Baja ya solicitada (${formatDateDisplay(bajaProgramada)})`;
-  }
-  if (canCancelNow) {
-    return 'Cancelar Inscripción Hoy (Inmediata)';
-  }
-  return 'Solicitar Baja para el Próximo Mes';
-};
-
-const resolveSportEnrollButtonText = ({ isFull, conflict, reachedMaxSports, sportName }) => {
-  if (isFull) return 'Cupo Completo';
-  if (conflict) return 'Bloqueado por Superposición Horaria';
-  if (reachedMaxSports) return 'Máximo 2 Deportes Alcanzado';
-  return `Inscribir en ${sportName}`;
-};
-
-const resolveRouteEnrollButtonText = ({ isCurrentRoute, estaLleno, routeId }) => {
-  if (isCurrentRoute) return 'Recorrido Actualmente Activo';
-  if (estaLleno) return 'Unidad Sprinter Completa (15/15)';
+const resolveRouteEnrollButtonText = ({
+  isCurrentRoute,
+  estaLleno,
+  routeId,
+}) => {
+  if (isCurrentRoute) return "Recorrido Actualmente Activo";
+  if (estaLleno) return "Unidad Sprinter Completa (15/15)";
   return `Seleccionar ${routeId}`;
 };
 
-const resolveDiningPolicyHint = ({ bajaSolicitada, bajaProgramada, canCancelToday }) => {
+const resolveDiningPolicyHint = ({
+  bajaSolicitada,
+  bajaProgramada,
+  canCancelToday,
+}) => {
   if (bajaSolicitada) {
     return `Baja programada para el ${formatDateDisplay(bajaProgramada)}`;
   }
   if (canCancelToday) {
-    return 'Cancelación inmediata disponible hoy';
+    return "Cancelación inmediata disponible hoy";
   }
-  return 'Baja diferida al 1º del próximo mes';
+  return "Baja diferida al 1º del próximo mes";
 };
 
-const resolveDiningButtonText = ({ bajaSolicitada, bajaProgramada, canCancelToday }) => {
+const resolveDiningButtonText = ({
+  bajaSolicitada,
+  bajaProgramada,
+  canCancelToday,
+}) => {
   if (bajaSolicitada) {
     return `Baja Programada (${formatDateDisplay(bajaProgramada)})`;
   }
   if (canCancelToday) {
-    return 'Cancelar Comedor Hoy (Baja Inmediata)';
+    return "Cancelar Comedor Hoy (Baja Inmediata)";
   }
-  return 'Solicitar Baja para el Próximo Mes';
+  return "Solicitar Baja para el Próximo Mes";
 };
 
-const resolveSportOccupiedCount = (disc, student, isEnrolled) => {
-  const inscriptos = Array.isArray(disc.inscriptos) ? disc.inscriptos : [];
-  const studentId = String(student?.id || '').trim();
-  const inRoster =
-    Boolean(studentId) &&
-    inscriptos.some((ins) => String(ins?.id || ins?.studentId || '').trim() === studentId);
-  const baseOccupied = Math.max(Number(disc.cupoOcupado) || 0, inscriptos.length);
-  return isEnrolled && !inRoster ? baseOccupied + 1 : baseOccupied;
-};
-
-const SportCardItem = ({
-  disc,
-  student,
-  enrolledDisciplines,
-  tariffsConfig,
-  isStudentRole,
-  isBusy,
-  onEnroll,
-  onWithdraw,
-}) => {
+const SportCardItem = ({ disc, student, tariffsConfig, onPress }) => {
   const isEnrolled = isStudentEnrolledInDiscipline(student, disc);
-  const subInfo = student.deportesSuscripciones?.[disc.id] || {};
-  const startDate = subInfo.fechaInicio || student.deporteFechaInicio;
-  const canCancelNow = canCancelServiceToday(startDate);
-  const isScheduledCancel = Boolean(subInfo.bajaSolicitada);
-
   const monthlyRate = getSportMonthlyPrice(disc, tariffsConfig);
-  const propInfo = calculateMonthlyProportional({
-    startDate: isEnrolled ? startDate : new Date(),
-    monthlyRate,
-  });
-
-  const conflict = !isEnrolled
-    ? checkScheduleConflict(enrolledDisciplines, disc)
-    : null;
-  const cupoMax = Number(disc.cupoMax) || 25;
-  const cupoOcupado = resolveSportOccupiedCount(disc, student, isEnrolled);
-  const isFull = cupoOcupado >= cupoMax && !isEnrolled;
-  const reachedMaxSports = enrolledDisciplines.length >= 2 && !isEnrolled;
-
-  const cancellationHint = resolveCancellationPolicyHint({
-    isScheduledCancel,
-    bajaProgramada: subInfo.bajaProgramada,
-    canCancelNow,
-  });
-
-  const withdrawText = resolveWithdrawButtonText({
-    isScheduledCancel,
-    bajaProgramada: subInfo.bajaProgramada,
-    canCancelNow,
-  });
-
-  const enrollText = resolveSportEnrollButtonText({
-    isFull,
-    conflict,
-    reachedMaxSports,
-    sportName: disc.nombre,
-  });
+  const iconName = resolveSportIcon(disc.nombre);
 
   return (
-    <View style={[styles.serviceCard, isEnrolled && styles.serviceCardEnrolled]}>
-      <View style={styles.sportTopRow}>
-        <View style={styles.emojiBox}>
-          <Text style={{ fontSize: 20 }}>{disc.emoji || '🏅'}</Text>
+    <TouchableOpacity
+      style={[
+        styles.sportCompactCard,
+        isEnrolled && styles.sportCompactCardEnrolled,
+      ]}
+      onPress={() => onPress(disc)}
+      activeOpacity={0.75}
+    >
+      <View style={styles.sportCompactLeft}>
+        <View
+          style={[
+            styles.sportCompactIcon,
+            isEnrolled && styles.sportCompactIconEnrolled,
+          ]}
+        >
+          <Ionicons
+            name={iconName}
+            size={20}
+            color={isEnrolled ? COLORS.emerald : COLORS.accent}
+          />
         </View>
-        <View style={{ flex: 1 }}>
+
+        <View style={styles.sportCompactInfo}>
           <View style={styles.titleWithBadge}>
-            <Text style={styles.sportName}>{disc.nombre}</Text>
+            <Text style={styles.sportCompactTitle}>{disc.nombre}</Text>
             {isEnrolled && (
               <View style={styles.activePill}>
                 <Text style={styles.activePillText}>INSCRIPTO</Text>
               </View>
             )}
           </View>
-          <Text style={styles.sportTeacher}>
-            Profesor responsable: {disc.profesor?.nombre || 'Docente asignado'}
-          </Text>
-          <Text style={styles.sportSchedule}>
-            {disc.horario} · {disc.lugar}
-          </Text>
-        </View>
-        <View style={{ alignItems: 'flex-end' }}>
-          <Text style={styles.priceTag}>{formatCurrencyARS(monthlyRate)}/mes</Text>
-          <Text style={styles.propSmallTag}>
-            1º mes prop.: {propInfo.formattedProportional}
-          </Text>
         </View>
       </View>
 
-      <View style={styles.metaStrip}>
-        <Text style={styles.metaStripText}>
-          Nivel: {disc.niveles || 'Todos'}
+      <View style={styles.sportCompactRight}>
+        <Text style={styles.sportCompactPrice}>
+          {formatCurrencyARS(monthlyRate)}
+          <Text style={styles.sportCompactPriceSub}> / mes</Text>
         </Text>
-        <Text style={styles.metaStripText}>
-          Vacantes: {cupoOcupado}/{cupoMax} ocupadas
-        </Text>
+        <Ionicons name="chevron-forward" size={17} color={COLORS.textMuted} />
       </View>
-
-      {conflict && !isEnrolled && (
-        <View style={styles.conflictBox}>
-          <Ionicons name="warning" size={15} color={COLORS.rose} />
-          <Text style={styles.conflictText}>
-            Conflicto de horario: {conflict.overlapLabel}
-          </Text>
-        </View>
-      )}
-
-      {isEnrolled && (
-        <View style={styles.subscriptionStatusBox}>
-          <Text style={styles.subscriptionStatusText}>
-            Fecha de alta: {formatDateDisplay(startDate)} · {cancellationHint}
-          </Text>
-        </View>
-      )}
-
-      {!isStudentRole && (
-        <View style={styles.cardActionRow}>
-          {isEnrolled ? (
-            <TouchableOpacity
-              style={[
-                styles.withdrawBtn,
-                isScheduledCancel && { opacity: 0.55 },
-              ]}
-              onPress={() => onWithdraw(disc)}
-              disabled={isBusy || isScheduledCancel}
-            >
-              {isBusy ? (
-                <ActivityIndicator size="small" color={COLORS.rose} />
-              ) : (
-                <>
-                  <Ionicons
-                    name="close-circle-outline"
-                    size={16}
-                    color={COLORS.rose}
-                  />
-                  <Text style={styles.withdrawBtnText}>{withdrawText}</Text>
-                </>
-              )}
-            </TouchableOpacity>
-          ) : (
-            <TouchableOpacity
-              style={[
-                styles.enrollBtn,
-                (Boolean(conflict) || isFull || reachedMaxSports) &&
-                  styles.enrollBtnDisabled,
-              ]}
-              onPress={() => onEnroll(disc)}
-              disabled={
-                isBusy || Boolean(conflict) || isFull || reachedMaxSports
-              }
-            >
-              {isBusy ? (
-                <ActivityIndicator size="small" color={COLORS.white} />
-              ) : (
-                <>
-                  <Ionicons
-                    name="add-circle-outline"
-                    size={16}
-                    color={COLORS.white}
-                  />
-                  <Text style={styles.enrollBtnText}>{enrollText}</Text>
-                </>
-              )}
-            </TouchableOpacity>
-          )}
-        </View>
-      )}
-    </View>
+    </TouchableOpacity>
   );
 };
 
@@ -274,7 +157,7 @@ const TransportRouteCardItem = ({
     route.id,
     allStudents,
     routes,
-    SPRINTER_STANDARD_CAPACITY
+    SPRINTER_STANDARD_CAPACITY,
   );
   const isCurrentRoute =
     studentRoute &&
@@ -294,10 +177,7 @@ const TransportRouteCardItem = ({
   return (
     <View
       key={route.id}
-      style={[
-        styles.serviceCard,
-        isCurrentRoute && styles.serviceCardEnrolled,
-      ]}
+      style={[styles.serviceCard, isCurrentRoute && styles.serviceCardEnrolled]}
     >
       <View style={styles.sportTopRow}>
         <View style={[styles.emojiBox, { backgroundColor: COLORS.cyanSoft }]}>
@@ -310,7 +190,7 @@ const TransportRouteCardItem = ({
             Ida: {route.horarioIda} · Regreso: {route.horarioRegreso}
           </Text>
         </View>
-        <View style={{ alignItems: 'flex-end' }}>
+        <View style={{ alignItems: "flex-end" }}>
           <Text style={styles.priceTag}>
             {formatCurrencyARS(monthlyPrice)}/mes
           </Text>
@@ -322,9 +202,7 @@ const TransportRouteCardItem = ({
 
       <View style={styles.occupancyBarWrap}>
         <View style={styles.occupancyLabels}>
-          <Text style={styles.occupancyText}>
-            Mercedes-Benz Sprinter
-          </Text>
+          <Text style={styles.occupancyText}>Mercedes-Benz Sprinter</Text>
           <Text
             style={[
               styles.occupancyFreeText,
@@ -332,7 +210,7 @@ const TransportRouteCardItem = ({
             ]}
           >
             {occupancy.estaLleno
-              ? 'SIN VACANTES (15/15)'
+              ? "SIN VACANTES (15/15)"
               : `${occupancy.disponibles} plazas libres`}
           </Text>
         </View>
@@ -355,8 +233,7 @@ const TransportRouteCardItem = ({
         <TouchableOpacity
           style={[
             styles.enrollBtn,
-            (isCurrentRoute || occupancy.estaLleno) &&
-              styles.enrollBtnDisabled,
+            (isCurrentRoute || occupancy.estaLleno) && styles.enrollBtnDisabled,
           ]}
           onPress={() => onEnrollRoute(route)}
           disabled={isBusy || isCurrentRoute || occupancy.estaLleno}
@@ -397,10 +274,7 @@ const DiningCardItem = ({
 
   return (
     <View
-      style={[
-        styles.serviceCard,
-        isDiningActive && styles.serviceCardEnrolled,
-      ]}
+      style={[styles.serviceCard, isDiningActive && styles.serviceCardEnrolled]}
     >
       <View style={styles.sportTopRow}>
         <View style={[styles.emojiBox, { backgroundColor: COLORS.accentSoft }]}>
@@ -409,24 +283,19 @@ const DiningCardItem = ({
         <View style={{ flex: 1 }}>
           <View style={styles.titleWithBadge}>
             <Text style={styles.sportName}>
-              Servicio de Comedor Escolar Mensual
+              Servicio de Comedor
             </Text>
-            {isDiningActive && (
-              <View style={styles.activePill}>
-                <Text style={styles.activePillText}>ACTIVO</Text>
-              </View>
-            )}
           </View>
           <Text style={styles.sportTeacher}>
-            Almuerzo nutricional supervisado para jornada extendida
+            Escolar Mensual
           </Text>
         </View>
-        <View style={{ alignItems: 'flex-end' }}>
+        <View style={{ alignItems: "flex-end" }}>
           <Text style={styles.priceTag}>
             {formatCurrencyARS(diningPrice)}/mes
           </Text>
           <Text style={styles.propSmallTag}>
-            Prop. mes:{' '}
+            Prop. mes:{" "}
             {
               calculateMonthlyProportional({
                 startDate: isDiningActive
@@ -442,35 +311,37 @@ const DiningCardItem = ({
       {isDiningActive && (
         <View style={styles.subscriptionStatusBox}>
           <Text style={styles.subscriptionStatusText}>
-            Fecha de alta: {formatDateDisplay(student.comedorFechaInicio)} · {policyHint}
+            Fecha de alta: {formatDateDisplay(student.comedorFechaInicio)} ·{" "}
+            {policyHint}
           </Text>
         </View>
       )}
 
-      <View style={{ gap: 6, marginTop: 4 }}>
-        <Text style={styles.smallInputLabel}>
-          Observaciones Nutricionales / Restricciones Alimentarias (Celiaquía, Alergias, etc.)
-        </Text>
-        <TextInput
-          style={styles.notesInput}
-          value={diningNotes}
-          onChangeText={setDiningNotes}
-          editable={!isStudentRole}
-          placeholder="Ej: Sin restricciones alimentarias / Menú apto celíaco"
-        />
-        {!isStudentRole && (
-          <TouchableOpacity
-            style={styles.saveNotesBtn}
-            onPress={onSaveNotes}
-            disabled={processingKey === 'save-dining-notes'}
-          >
-            <Ionicons name="save-outline" size={14} color={COLORS.indigo} />
-            <Text style={styles.saveNotesBtnText}>
-              Guardar Observaciones de Comedor
-            </Text>
-          </TouchableOpacity>
-        )}
-      </View>
+      {isDiningActive && (
+        <View style={{ gap: 6, marginTop: 4 }}>
+          <Text style={styles.smallInputLabel}>
+            Observaciones Nutricionales / Restricciones Alimentarias
+          </Text>
+          <TextInput
+            style={styles.notesInput}
+            value={diningNotes}
+            onChangeText={setDiningNotes}
+            editable={!isStudentRole}
+            placeholder="Celiaquía, Alergias, etc."
+          />
+          {!isStudentRole && (
+            <TouchableOpacity
+              style={styles.saveNotesBtn}
+              onPress={onSaveNotes}
+              disabled={processingKey === "save-dining-notes"}
+            >
+              <Text style={styles.saveNotesBtnText}>
+                Guardar Observaciones de Comedor
+              </Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
 
       {!isStudentRole && (
         <View style={styles.cardActionRow}>
@@ -482,7 +353,7 @@ const DiningCardItem = ({
               ]}
               onPress={() => onToggleDining(false)}
               disabled={
-                processingKey === 'toggle-dining' ||
+                processingKey === "toggle-dining" ||
                 Boolean(student.comedorBajaSolicitada)
               }
             >
@@ -492,7 +363,7 @@ const DiningCardItem = ({
             <TouchableOpacity
               style={styles.enrollBtn}
               onPress={() => onToggleDining(true)}
-              disabled={processingKey === 'toggle-dining'}
+              disabled={processingKey === "toggle-dining"}
             >
               <Ionicons
                 name="checkmark-circle-outline"
@@ -520,20 +391,36 @@ const ServicesScreen = ({
   onStudentUpdated,
   onFeedback,
 }) => {
-  const [activeServiceTab, setActiveServiceTab] = useState('sports'); // 'sports' | 'transport' | 'dining'
+  const [activeServiceTab, setActiveServiceTab] = useState("sports"); // 'sports' | 'transport' | 'dining'
   const [processingKey, setProcessingKey] = useState(null);
-  const [diningNotes, setDiningNotes] = useState(student?.observacionesComedor || '');
+  const [diningNotes, setDiningNotes] = useState(
+    student?.observacionesComedor || "",
+  );
+  const [selectedDisciplineForDetail, setSelectedDisciplineForDetail] =
+    useState(null);
 
   const { diningPrice } = useMemo(
     () => resolveOfficialTariffs(tariffsConfig),
-    [tariffsConfig]
+    [tariffsConfig],
   );
 
   // Deportes activos del alumno
   const enrolledDisciplines = useMemo(() => {
     if (!student) return [];
-    return allDisciplines.filter((d) => isStudentEnrolledInDiscipline(student, d));
+    return allDisciplines.filter((d) =>
+      isStudentEnrolledInDiscipline(student, d),
+    );
   }, [student, allDisciplines]);
+
+  // Mantener la disciplina abierta sincronizada si cambian los datos del estudiante
+  const activeDisciplineInModal = useMemo(() => {
+    if (!selectedDisciplineForDetail) return null;
+    return (
+      allDisciplines.find(
+        (d) => String(d.id) === String(selectedDisciplineForDetail.id),
+      ) || selectedDisciplineForDetail
+    );
+  }, [allDisciplines, selectedDisciplineForDetail]);
 
   // Estado de Transporte del alumno
   const studentRoute = useMemo(() => {
@@ -541,16 +428,16 @@ const ServicesScreen = ({
     const servicios = Array.isArray(student.servicios) ? student.servicios : [];
     const hasTransport =
       Boolean(student.recorridoTransporte) ||
-      servicios.some((s) => String(s).toLowerCase().includes('transporte'));
+      servicios.some((s) => String(s).toLowerCase().includes("transporte"));
     if (!hasTransport) return null;
     return (
       matchTransportRoute(student.recorridoTransporte, routes) || {
-        id: student.recorridoTransporte || 'Recorrido 1',
-        code: 'r1',
-        nombre: student.recorridoTransporte || 'Recorrido 1 - Zona Norte',
-        zona: 'Recorrido escolar asignado',
-        horarioIda: '07:00 hs',
-        horarioRegreso: '16:30 hs',
+        id: student.recorridoTransporte || "Recorrido 1",
+        code: "r1",
+        nombre: student.recorridoTransporte || "Recorrido 1 - Zona Norte",
+        zona: "Recorrido escolar asignado",
+        horarioIda: "07:00 hs",
+        horarioRegreso: "16:30 hs",
       }
     );
   }, [student, routes]);
@@ -561,7 +448,7 @@ const ServicesScreen = ({
     const servicios = Array.isArray(student.servicios) ? student.servicios : [];
     return (
       Boolean(student.comedor) ||
-      servicios.some((s) => String(s).toLowerCase().includes('comedor'))
+      servicios.some((s) => String(s).toLowerCase().includes("comedor"))
     );
   }, [student]);
 
@@ -569,7 +456,9 @@ const ServicesScreen = ({
     return (
       <View style={styles.emptyWrap}>
         <Ionicons name="person-outline" size={38} color={COLORS.textMuted} />
-        <Text style={styles.emptyText}>Seleccione un alumno para gestionar sus servicios.</Text>
+        <Text style={styles.emptyText}>
+          Seleccione un alumno para gestionar sus servicios.
+        </Text>
       </View>
     );
   }
@@ -590,11 +479,11 @@ const ServicesScreen = ({
         monthlyRate: price,
       });
       onFeedback?.({
-        type: 'success',
+        type: "success",
         message: `Inscripción a ${discipline.nombre} confirmada. Proporcional primer mes (${prop.activeDays}/${prop.daysInMonth} días): ${prop.formattedProportional}.`,
       });
     } catch (err) {
-      onFeedback?.({ type: 'error', message: err.message });
+      onFeedback?.({ type: "error", message: err.message });
     } finally {
       setProcessingKey(null);
     }
@@ -610,11 +499,11 @@ const ServicesScreen = ({
       });
       onStudentUpdated?.(res.student);
       onFeedback?.({
-        type: 'success',
+        type: "success",
         message: res.message,
       });
     } catch (err) {
-      onFeedback?.({ type: 'error', message: err.message });
+      onFeedback?.({ type: "error", message: err.message });
     } finally {
       setProcessingKey(null);
     }
@@ -637,11 +526,11 @@ const ServicesScreen = ({
         monthlyRate: price,
       });
       onFeedback?.({
-        type: 'success',
+        type: "success",
         message: `Alta en ${route.nombre} confirmada. Proporcional primer mes (${prop.activeDays}/${prop.daysInMonth} días): ${prop.formattedProportional}.`,
       });
     } catch (err) {
-      onFeedback?.({ type: 'error', message: err.message });
+      onFeedback?.({ type: "error", message: err.message });
     } finally {
       setProcessingKey(null);
     }
@@ -649,13 +538,13 @@ const ServicesScreen = ({
 
   const handleCancelRouteAction = async () => {
     if (isStudentRole) return;
-    setProcessingKey('cancel-route');
+    setProcessingKey("cancel-route");
     try {
       const res = await cancelStudentTransport({ student });
       onStudentUpdated?.(res.student);
-      onFeedback?.({ type: 'success', message: res.message });
+      onFeedback?.({ type: "success", message: res.message });
     } catch (err) {
-      onFeedback?.({ type: 'error', message: err.message });
+      onFeedback?.({ type: "error", message: err.message });
     } finally {
       setProcessingKey(null);
     }
@@ -663,7 +552,7 @@ const ServicesScreen = ({
 
   const handleToggleDiningAction = async (nextActive) => {
     if (isStudentRole) return;
-    setProcessingKey('toggle-dining');
+    setProcessingKey("toggle-dining");
     try {
       const res = await toggleStudentDining({
         student,
@@ -671,9 +560,9 @@ const ServicesScreen = ({
         observacionesComedor: diningNotes || student.observacionesComedor,
       });
       onStudentUpdated?.(res.student);
-      onFeedback?.({ type: 'success', message: res.message });
+      onFeedback?.({ type: "success", message: res.message });
     } catch (err) {
-      onFeedback?.({ type: 'error', message: err.message });
+      onFeedback?.({ type: "error", message: err.message });
     } finally {
       setProcessingKey(null);
     }
@@ -681,7 +570,7 @@ const ServicesScreen = ({
 
   const handleSaveDiningNotes = async () => {
     if (isStudentRole) return;
-    setProcessingKey('save-dining-notes');
+    setProcessingKey("save-dining-notes");
     try {
       const updated = await updateStudentDiningObservations({
         student,
@@ -689,11 +578,11 @@ const ServicesScreen = ({
       });
       onStudentUpdated?.(updated);
       onFeedback?.({
-        type: 'success',
-        message: 'Observaciones nutricionales de comedor actualizadas.',
+        type: "success",
+        message: "Observaciones nutricionales de comedor actualizadas.",
       });
     } catch (err) {
-      onFeedback?.({ type: 'error', message: err.message });
+      onFeedback?.({ type: "error", message: err.message });
     } finally {
       setProcessingKey(null);
     }
@@ -706,19 +595,23 @@ const ServicesScreen = ({
         <TouchableOpacity
           style={[
             styles.subTab,
-            activeServiceTab === 'sports' && styles.subTabActive,
+            activeServiceTab === "sports" && styles.subTabActive,
           ]}
-          onPress={() => setActiveServiceTab('sports')}
+          onPress={() => setActiveServiceTab("sports")}
         >
           <Ionicons
             name="football-outline"
             size={15}
-            color={activeServiceTab === 'sports' ? COLORS.white : COLORS.textSecondary}
+            color={
+              activeServiceTab === "sports"
+                ? COLORS.white
+                : COLORS.textSecondary
+            }
           />
           <Text
             style={[
               styles.subTabText,
-              activeServiceTab === 'sports' && styles.subTabTextActive,
+              activeServiceTab === "sports" && styles.subTabTextActive,
             ]}
           >
             Deportes
@@ -728,19 +621,23 @@ const ServicesScreen = ({
         <TouchableOpacity
           style={[
             styles.subTab,
-            activeServiceTab === 'transport' && styles.subTabActive,
+            activeServiceTab === "transport" && styles.subTabActive,
           ]}
-          onPress={() => setActiveServiceTab('transport')}
+          onPress={() => setActiveServiceTab("transport")}
         >
           <Ionicons
             name="bus-outline"
             size={15}
-            color={activeServiceTab === 'transport' ? COLORS.white : COLORS.textSecondary}
+            color={
+              activeServiceTab === "transport"
+                ? COLORS.white
+                : COLORS.textSecondary
+            }
           />
           <Text
             style={[
               styles.subTabText,
-              activeServiceTab === 'transport' && styles.subTabTextActive,
+              activeServiceTab === "transport" && styles.subTabTextActive,
             ]}
           >
             Transporte
@@ -750,19 +647,23 @@ const ServicesScreen = ({
         <TouchableOpacity
           style={[
             styles.subTab,
-            activeServiceTab === 'dining' && styles.subTabActive,
+            activeServiceTab === "dining" && styles.subTabActive,
           ]}
-          onPress={() => setActiveServiceTab('dining')}
+          onPress={() => setActiveServiceTab("dining")}
         >
           <Ionicons
             name="restaurant-outline"
             size={15}
-            color={activeServiceTab === 'dining' ? COLORS.white : COLORS.textSecondary}
+            color={
+              activeServiceTab === "dining"
+                ? COLORS.white
+                : COLORS.textSecondary
+            }
           />
           <Text
             style={[
               styles.subTabText,
-              activeServiceTab === 'dining' && styles.subTabTextActive,
+              activeServiceTab === "dining" && styles.subTabTextActive,
             ]}
           >
             Comedor
@@ -775,68 +676,51 @@ const ServicesScreen = ({
         <View style={styles.policyBanner}>
           <Ionicons name="information-circle" size={18} color={COLORS.indigo} />
           <Text style={styles.policyText}>
-            <Text style={{ fontWeight: '800' }}>Normativa Institucional de Servicios:</Text> Al darse de alta se cobra solo el proporcional de los días restantes del primer mes. La baja inmediata sin cargo solo está disponible durante el mismo día del alta; a partir del día siguiente, la baja queda programada para el 1º del próximo mes.
+            <Text style={{ fontWeight: "800" }}>
+              Normativa Institucional de Servicios:
+            </Text>{" "}
+            Al darse de alta se cobra solo el proporcional de los días restantes
+            del primer mes. La baja inmediata sin cargo solo está disponible
+            durante el mismo día del alta; a partir del día siguiente, la baja
+            queda programada para el 1º del próximo mes.
           </Text>
         </View>
 
-        {/* TAB 1: DEPORTES EXTRACURRICULARES (Máx. 2 deportes + Validación de Horarios) */}
-        {activeServiceTab === 'sports' && (
+        {/* TAB 1: DEPORTES EXTRACURRICULARES (Cards Limpias con Detalle en Modal) */}
+        {activeServiceTab === "sports" && (
           <View style={styles.sectionWrap}>
-            <View style={styles.sectionHeaderCard}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.sectionTitle}>
-                  Deportes Extracurriculares
-                </Text>
-                <Text style={styles.sectionSub}>
-                  Cada alumno puede inscribirse hasta en 2 deportes simultáneamente sin superposición horaria. Precios diferenciados por disciplina.
-                </Text>
-              </View>
-            </View>
-
             {allDisciplines.map((disc) => (
               <SportCardItem
                 key={disc.id}
                 disc={disc}
                 student={student}
-                enrolledDisciplines={enrolledDisciplines}
                 tariffsConfig={tariffsConfig}
-                isStudentRole={isStudentRole}
-                isBusy={processingKey === `sport-${disc.id}`}
-                onEnroll={handleEnrollSportAction}
-                onWithdraw={handleWithdrawSportAction}
+                onPress={setSelectedDisciplineForDetail}
               />
             ))}
           </View>
         )}
 
         {/* TAB 2: TRANSPORTE ESCOLAR (4 Recorridos - Mercedes-Benz Sprinter 15 Plazas) */}
-        {activeServiceTab === 'transport' && (
+        {activeServiceTab === "transport" && (
           <View style={styles.sectionWrap}>
-            <View style={styles.sectionHeaderCard}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.sectionTitle}>
-                  Servicio de Micros de Traslado (4 Recorridos Oficiales)
-                </Text>
-                <Text style={styles.sectionSub}>
-                  Unidades Mercedes-Benz Sprinter con capacidad máxima de 15 plazas por recorrido y tarifas diferenciadas.
-                </Text>
-              </View>
-            </View>
-
             {studentRoute && (
               <View style={styles.currentTransportBanner}>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.currentTransportTag}>
                     RECORRIDO ACTUALMENTE ASIGNADO AL ALUMNO
                   </Text>
-                  <Text style={styles.currentTransportTitle}>{studentRoute.nombre}</Text>
+                  <Text style={styles.currentTransportTitle}>
+                    {studentRoute.nombre}
+                  </Text>
                   <Text style={styles.currentTransportMeta}>
-                    Ida: {studentRoute.horarioIda} · Regreso: {studentRoute.horarioRegreso} · Alta:{' '}
+                    Ida: {studentRoute.horarioIda} · Regreso:{" "}
+                    {studentRoute.horarioRegreso} · Alta:{" "}
                     {formatDateDisplay(student.transporteFechaInicio)}
                   </Text>
                   {student.transporteBajaSolicitada && (
                     <Text style={styles.scheduledCancelWarning}>
-                      Baja programada solicitada para el{' '}
+                      Baja programada solicitada para el{" "}
                       {formatDateDisplay(student.transporteBajaProgramada)}.
                     </Text>
                   )}
@@ -846,12 +730,12 @@ const ServicesScreen = ({
                   <TouchableOpacity
                     style={styles.cancelTransportBtn}
                     onPress={handleCancelRouteAction}
-                    disabled={processingKey === 'cancel-route'}
+                    disabled={processingKey === "cancel-route"}
                   >
                     <Text style={styles.cancelTransportBtnText}>
                       {canCancelServiceToday(student.transporteFechaInicio)
-                        ? 'Dar de Baja Hoy'
-                        : 'Baja Próximo Mes'}
+                        ? "Dar de Baja Hoy"
+                        : "Baja Próximo Mes"}
                     </Text>
                   </TouchableOpacity>
                 )}
@@ -876,7 +760,7 @@ const ServicesScreen = ({
         )}
 
         {/* TAB 3: COMEDOR ESCOLAR */}
-        {activeServiceTab === 'dining' && (
+        {activeServiceTab === "dining" && (
           <View style={styles.sectionWrap}>
             <DiningCardItem
               student={student}
@@ -892,6 +776,20 @@ const ServicesScreen = ({
           </View>
         )}
       </ScrollView>
+
+      {/* Modal Bottom Sheet de Detalle del Deporte */}
+      <SportDetailModal
+        visible={Boolean(activeDisciplineInModal)}
+        discipline={activeDisciplineInModal}
+        student={student}
+        enrolledDisciplines={enrolledDisciplines}
+        tariffsConfig={tariffsConfig}
+        isStudentRole={isStudentRole}
+        isBusy={Boolean(processingKey && processingKey.startsWith("sport-"))}
+        onClose={() => setSelectedDisciplineForDetail(null)}
+        onEnroll={handleEnrollSportAction}
+        onWithdraw={handleWithdrawSportAction}
+      />
     </View>
   );
 };
@@ -901,10 +799,71 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: COLORS.background,
   },
+  sportCompactCard: {
+    backgroundColor: COLORS.surface,
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  sportCompactCardEnrolled: {
+    borderColor: COLORS.emerald,
+    borderWidth: 1.5,
+    backgroundColor: "#F0FDF4",
+  },
+  sportCompactLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    flex: 1,
+  },
+  sportCompactIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    backgroundColor: COLORS.accentSoft,
+    borderWidth: 1,
+    borderColor: COLORS.accentBorder,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  sportCompactIconEnrolled: {
+    backgroundColor: COLORS.emeraldSoft,
+    borderColor: COLORS.emeraldBorder,
+  },
+  sportCompactInfo: {
+    flex: 1,
+    gap: 2,
+  },
+  sportCompactTitle: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: COLORS.text,
+  },
+  sportCompactRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  sportCompactPrice: {
+    fontSize: 13,
+    fontWeight: "800",
+    color: COLORS.emerald,
+  },
+  sportCompactPriceSub: {
+    fontSize: 10,
+    fontWeight: "600",
+    color: COLORS.textSecondary,
+  },
   emptyWrap: {
     flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
     padding: 24,
     gap: 8,
   },
@@ -913,7 +872,7 @@ const styles = StyleSheet.create({
     color: COLORS.textSecondary,
   },
   subTabsBar: {
-    flexDirection: 'row',
+    flexDirection: "row",
     backgroundColor: COLORS.surface,
     paddingHorizontal: 14,
     paddingVertical: 8,
@@ -923,9 +882,9 @@ const styles = StyleSheet.create({
   },
   subTab: {
     flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
     gap: 5,
     paddingVertical: 8,
     borderRadius: 8,
@@ -939,7 +898,7 @@ const styles = StyleSheet.create({
   },
   subTabText: {
     fontSize: 11,
-    fontWeight: '700',
+    fontWeight: "700",
     color: COLORS.textSecondary,
   },
   subTabTextActive: {
@@ -951,8 +910,8 @@ const styles = StyleSheet.create({
     gap: 14,
   },
   policyBanner: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
+    flexDirection: "row",
+    alignItems: "flex-start",
     gap: 8,
     backgroundColor: COLORS.indigoSoft,
     borderColor: COLORS.indigoBorder,
@@ -969,28 +928,6 @@ const styles = StyleSheet.create({
   sectionWrap: {
     gap: 12,
   },
-  sectionHeaderCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: COLORS.surface,
-    padding: 13,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    gap: 10,
-  },
-  sectionTitle: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: COLORS.text,
-  },
-  sectionSub: {
-    fontSize: 11,
-    color: COLORS.textSecondary,
-    marginTop: 2,
-    lineHeight: 15,
-  },
   serviceCard: {
     backgroundColor: COLORS.surface,
     borderRadius: 12,
@@ -1004,8 +941,8 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
   },
   sportTopRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
+    flexDirection: "row",
+    alignItems: "flex-start",
     gap: 10,
   },
   emojiBox: {
@@ -1013,18 +950,18 @@ const styles = StyleSheet.create({
     height: 42,
     borderRadius: 10,
     backgroundColor: COLORS.surfaceAlt,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
   },
   titleWithBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexWrap: 'wrap',
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
     gap: 6,
   },
   sportName: {
     fontSize: 14,
-    fontWeight: '800',
+    fontWeight: "800",
     color: COLORS.text,
   },
   activePill: {
@@ -1037,14 +974,14 @@ const styles = StyleSheet.create({
   },
   activePillText: {
     fontSize: 9,
-    fontWeight: '800',
+    fontWeight: "800",
     color: COLORS.emerald,
   },
   sportTeacher: {
     fontSize: 11,
     color: COLORS.textSecondary,
     marginTop: 2,
-    fontWeight: '600',
+    fontWeight: "600",
   },
   sportSchedule: {
     fontSize: 11,
@@ -1053,42 +990,13 @@ const styles = StyleSheet.create({
   },
   priceTag: {
     fontSize: 13,
-    fontWeight: '900',
+    fontWeight: "900",
     color: COLORS.emerald,
   },
   propSmallTag: {
     fontSize: 10,
     color: COLORS.textSecondary,
     marginTop: 2,
-  },
-  metaStrip: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    backgroundColor: COLORS.surfaceAlt,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
-  },
-  metaStripText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: COLORS.textSecondary,
-  },
-  conflictBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: COLORS.roseSoft,
-    borderWidth: 1,
-    borderColor: COLORS.roseBorder,
-    padding: 8,
-    borderRadius: 8,
-  },
-  conflictText: {
-    flex: 1,
-    fontSize: 11,
-    fontWeight: '700',
-    color: COLORS.rose,
   },
   subscriptionStatusBox: {
     backgroundColor: COLORS.emeraldSoft,
@@ -1097,16 +1005,16 @@ const styles = StyleSheet.create({
   },
   subscriptionStatusText: {
     fontSize: 11,
-    fontWeight: '600',
-    color: '#065F46',
+    fontWeight: "600",
+    color: "#065F46",
   },
   cardActionRow: {
     marginTop: 2,
   },
   enrollBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
     gap: 6,
     backgroundColor: COLORS.emerald,
     paddingVertical: 10,
@@ -1117,13 +1025,13 @@ const styles = StyleSheet.create({
   },
   enrollBtnText: {
     fontSize: 12,
-    fontWeight: '800',
+    fontWeight: "800",
     color: COLORS.white,
   },
   withdrawBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
     gap: 6,
     backgroundColor: COLORS.roseSoft,
     borderWidth: 1,
@@ -1133,13 +1041,13 @@ const styles = StyleSheet.create({
   },
   withdrawBtnText: {
     fontSize: 12,
-    fontWeight: '800',
+    fontWeight: "800",
     color: COLORS.rose,
   },
   currentTransportBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    flexDirection: "col",
+    alignItems: "left",
+    justifyContent: "space-between",
     backgroundColor: COLORS.emeraldSoft,
     borderWidth: 1,
     borderColor: COLORS.emeraldBorder,
@@ -1149,24 +1057,24 @@ const styles = StyleSheet.create({
   },
   currentTransportTag: {
     fontSize: 9,
-    fontWeight: '800',
+    fontWeight: "800",
     color: COLORS.emerald,
     letterSpacing: 0.6,
   },
   currentTransportTitle: {
     fontSize: 14,
-    fontWeight: '800',
-    color: '#064E3B',
+    fontWeight: "800",
+    color: "#064E3B",
     marginTop: 2,
   },
   currentTransportMeta: {
     fontSize: 11,
-    color: '#065F46',
+    color: "#065F46",
     marginTop: 2,
   },
   scheduledCancelWarning: {
     fontSize: 11,
-    fontWeight: '700',
+    fontWeight: "700",
     color: COLORS.amber,
     marginTop: 4,
   },
@@ -1178,38 +1086,41 @@ const styles = StyleSheet.create({
   },
   cancelTransportBtnText: {
     fontSize: 11,
-    fontWeight: '800',
+    fontWeight: "800",
+    paddingVertical: 3,
+    borderRadius: 8,
     color: COLORS.white,
+    textAlign: "center",
   },
   occupancyBarWrap: {
     gap: 5,
   },
   occupancyLabels: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+    flexDirection: "row",
+    justifyContent: "space-between",
   },
   occupancyText: {
     fontSize: 11,
-    fontWeight: '600',
+    fontWeight: "600",
     color: COLORS.textSecondary,
   },
   occupancyFreeText: {
     fontSize: 11,
-    fontWeight: '800',
+    fontWeight: "800",
   },
   progressTrack: {
     height: 7,
     backgroundColor: COLORS.surfaceAlt,
     borderRadius: 4,
-    overflow: 'hidden',
+    overflow: "hidden",
   },
   progressFill: {
-    height: '100%',
+    height: "100%",
     borderRadius: 4,
   },
   smallInputLabel: {
     fontSize: 11,
-    fontWeight: '700',
+    fontWeight: "700",
     color: COLORS.textSecondary,
   },
   notesInput: {
@@ -1223,10 +1134,9 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.background,
   },
   saveNotesBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'flex-start',
-    gap: 5,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 6,
@@ -1234,8 +1144,11 @@ const styles = StyleSheet.create({
   },
   saveNotesBtnText: {
     fontSize: 11,
-    fontWeight: '700',
+    fontWeight: "700",
     color: COLORS.indigo,
+    width: "90%",
+    textAlign: "center",
+    paddingVertical: 8,
   },
 });
 
