@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "centro-educativo-mobile",
+    "name": "Centro Educativo",
     "slug": "centro-educativo-mobile",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -10,6 +10,8 @@
       "supportsTablet": true
     },
     "android": {
+      "package": "com.educarparatransformar.mobile",
+      "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -20,6 +22,20 @@
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "plugins": ["expo-font"]
+    "plugins": [
+      "expo-font",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#EA580C"
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "b3aaabf9-ac57-4f51-baa8-1d996b4ce154"
+      }
+    }
   }
 }
