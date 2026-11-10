@@ -83,6 +83,21 @@ export const pickAllowedDocument = async () => {
   };
 };
 
+const readUriAsBlob = (uri) => {
+  if (typeof XMLHttpRequest !== 'undefined') {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.onload = () => resolve(xhr.response);
+      xhr.onerror = () =>
+        reject(new Error('No se pudo leer el contenido binario del archivo seleccionado.'));
+      xhr.responseType = 'blob';
+      xhr.open('GET', uri, true);
+      xhr.send(null);
+    });
+  }
+  return fetch(uri).then((r) => r.blob());
+};
+
 /**
  * Sube un comprobante bancario o certificado médico a Firebase Storage
  * cumpliendo estrictamente con storage.rules:
@@ -123,8 +138,7 @@ export const uploadFileToFirebaseStorage = async ({
   if (fileAsset.webFile) {
     binaryPayload = fileAsset.webFile;
   } else if (fileAsset.uri) {
-    const response = await fetch(fileAsset.uri);
-    binaryPayload = await response.blob();
+    binaryPayload = await readUriAsBlob(fileAsset.uri);
   } else {
     throw new Error('No se pudo leer el contenido binario del archivo seleccionado.');
   }

@@ -16,11 +16,40 @@ import LoginScreen from './src/screens/LoginScreen';
 import BillingScreen from './src/screens/BillingScreen';
 import ServicesScreen from './src/screens/ServicesScreen';
 import AcademicProfileScreen from './src/screens/AcademicProfileScreen';
-import ChildSelectorBar from './src/components/ChildSelectorBar';
 import ChangePasswordModal from './src/components/ChangePasswordModal';
+import HeaderBurgerMenuModal from './src/components/HeaderBurgerMenuModal';
+import ProfileModal from './src/components/ProfileModal';
+import NotificationsModal from './src/components/NotificationsModal';
+
+const resolveActiveStudentLabel = (
+  isParentRole,
+  linkedStudents,
+  selectedStudentId,
+  effectiveTab,
+  currentStudent
+) => {
+  if (!isParentRole || !Array.isArray(linkedStudents) || linkedStudents.length === 0) {
+    return null;
+  }
+  if (selectedStudentId === 'all' && effectiveTab === 'billing') {
+    return 'Grupo Familiar';
+  }
+  return (
+    currentStudent?.nombreCompleto ||
+    `${currentStudent?.nombre || ''} ${currentStudent?.apellido || ''}`.trim() ||
+    null
+  );
+};
 
 const MobilePortalShell = () => {
-  const { user, loading: authLoading, isLoggedIn, logout, changePassword } = useAuth();
+  const {
+    user,
+    loading: authLoading,
+    isLoggedIn,
+    logout,
+    changePassword,
+    updateTutorProfile,
+  } = useAuth();
   const {
     loading: portalLoading,
     isStudentRole,
@@ -34,10 +63,17 @@ const MobilePortalShell = () => {
     allDisciplines,
     routes,
     financeReceipts,
+    notifications,
+    unreadNotificationsCount,
+    markNotificationAsRead,
+    markAllNotificationsAsRead,
     updateStudentInState,
   } = useMobilePortalData(user);
 
   const [activeBottomTab, setActiveBottomTab] = useState('billing'); // 'billing' | 'services' | 'academic'
+  const [burgerMenuVisible, setBurgerMenuVisible] = useState(false);
+  const [profileModalVisible, setProfileModalVisible] = useState(false);
+  const [notificationsModalVisible, setNotificationsModalVisible] = useState(false);
   const [manualPasswordModal, setManualPasswordModal] = useState(false);
   const [feedbackBanner, setFeedbackBanner] = useState(null);
 
@@ -45,7 +81,7 @@ const MobilePortalShell = () => {
     return (
       <View style={styles.centeredScreen}>
         <ActivityIndicator size="large" color={COLORS.accent} />
-        <Text style={styles.loadingText}>Verificando sesión en Firebase Auth...</Text>
+        <Text style={styles.loadingText}>Validando sesión</Text>
       </View>
     );
   }
@@ -187,6 +223,14 @@ const MobilePortalShell = () => {
     </View>
   );
 
+  const activeStudentLabel = resolveActiveStudentLabel(
+    isParentRole,
+    linkedStudents,
+    selectedStudentId,
+    effectiveTab,
+    currentStudent
+  );
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar style="light" backgroundColor={COLORS.primary} />
@@ -194,33 +238,46 @@ const MobilePortalShell = () => {
       {/* Top Header Institucional */}
       <View style={styles.topHeader}>
         <View style={styles.brandRow}>
-          <View style={styles.brandIcon}>
-            <Ionicons name="school" size={20} color={COLORS.accent} />
-          </View>
-          <View style={{ flex: 1 }}>
+          <TouchableOpacity
+            style={styles.burgerBtn}
+            onPress={() => setBurgerMenuVisible(true)}
+            accessibilityLabel="Abrir menú lateral"
+          >
+            <Ionicons name="menu" size={22} color={COLORS.white} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={{ flex: 1 }}
+            activeOpacity={0.8}
+            onPress={() => setBurgerMenuVisible(true)}
+          >
             <Text style={styles.brandTitle} numberOfLines={1}>
-              Educar para Transformar
+              {user?.role === 'Padre' ? 'Portal de Padres' : 'Portal de Alumno'}
             </Text>
             <Text style={styles.userSub} numberOfLines={1}>
               {user?.nombre || user?.email}
+              {activeStudentLabel ? ` · ${activeStudentLabel}` : ''}
             </Text>
-          </View>
+          </TouchableOpacity>
         </View>
 
         <View style={styles.headerActions}>
           <TouchableOpacity
             style={styles.headerBtn}
-            onPress={() => setManualPasswordModal(true)}
-            accessibilityLabel="Cambiar contraseña"
+            onPress={() => setNotificationsModalVisible(true)}
+            accessibilityLabel="Notificaciones"
           >
-            <Ionicons name="key-outline" size={17} color={COLORS.white} />
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.headerBtn, { backgroundColor: 'rgba(225,29,72,0.25)' }]}
-            onPress={logout}
-            accessibilityLabel="Cerrar sesión"
-          >
-            <Ionicons name="log-out-outline" size={18} color="#FDA4AF" />
+            <Ionicons
+              name={unreadNotificationsCount > 0 ? 'notifications' : 'notifications-outline'}
+              size={19}
+              color={unreadNotificationsCount > 0 ? '#FDBA74' : COLORS.white}
+            />
+            {unreadNotificationsCount > 0 && (
+              <View style={styles.notifBadge}>
+                <Text style={styles.notifBadgeText}>
+                  {unreadNotificationsCount > 9 ? '9+' : unreadNotificationsCount}
+                </Text>
+              </View>
+            )}
           </TouchableOpacity>
         </View>
       </View>
@@ -256,21 +313,55 @@ const MobilePortalShell = () => {
         </View>
       )}
 
-      {/* Selector de Hijos (Multi-Hijo) para Padres/Tutores */}
-      {isParentRole && linkedStudents.length > 0 && (
-        <ChildSelectorBar
-          students={linkedStudents}
-          selectedStudentId={selectedStudentId}
-          onSelectStudent={setSelectedStudentId}
-          showAllOption={effectiveTab === 'billing'}
-        />
-      )}
-
       {/* Contenido Principal */}
       {renderMainContent()}
 
       {/* Barra de Navegación Inferior según Rol */}
       {renderBottomNav()}
+
+      {/* Menú Lateral Desplegable desde la Izquierda (Selector de Alumno, Mi Perfil, Cambiar Contraseña y Cerrar Sesión) */}
+      <HeaderBurgerMenuModal
+        visible={burgerMenuVisible}
+        user={user}
+        isStudentRole={isStudentRole}
+        students={linkedStudents}
+        selectedStudentId={selectedStudentId}
+        onSelectStudent={setSelectedStudentId}
+        showAllOption={effectiveTab === 'billing'}
+        onClose={() => setBurgerMenuVisible(false)}
+        onOpenProfile={() => setProfileModalVisible(true)}
+        onOpenChangePassword={() => setManualPasswordModal(true)}
+        onLogout={logout}
+      />
+
+      {/* Modal de Mi Perfil */}
+      <ProfileModal
+        visible={profileModalVisible}
+        user={user}
+        student={currentStudent}
+        isStudentRole={isStudentRole}
+        onClose={() => setProfileModalVisible(false)}
+        onSaveTutorProfile={updateTutorProfile}
+      />
+
+      {/* Centro de Notificaciones */}
+      <NotificationsModal
+        visible={notificationsModalVisible}
+        notifications={notifications}
+        unreadCount={unreadNotificationsCount}
+        onClose={() => setNotificationsModalVisible(false)}
+        onMarkAllAsRead={markAllNotificationsAsRead}
+        onSelectNotification={(item) => {
+          void markNotificationAsRead(item);
+          setNotificationsModalVisible(false);
+          if (item?.studentId && isParentRole) {
+            setSelectedStudentId(item.studentId);
+          }
+          if (item?.targetTab) {
+            setActiveBottomTab(item.targetTab);
+          }
+        }}
+      />
 
       {/* Modal de Cambio de Contraseña (Obligatorio si mustChangePassword === true o voluntario) */}
       <ChangePasswordModal
@@ -326,13 +417,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
   },
-  brandIcon: {
-    width: 36,
-    height: 36,
+  burgerBtn: {
+    width: 38,
+    height: 38,
     borderRadius: 10,
-    backgroundColor: 'rgba(234,88,12,0.18)',
+    backgroundColor: 'rgba(255,255,255,0.1)',
     borderWidth: 1,
-    borderColor: 'rgba(234,88,12,0.45)',
+    borderColor: 'rgba(255,255,255,0.14)',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -352,12 +443,32 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   headerBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: 8,
+    width: 36,
+    height: 36,
+    borderRadius: 10,
     backgroundColor: 'rgba(255,255,255,0.1)',
     alignItems: 'center',
     justifyContent: 'center',
+    position: 'relative',
+  },
+  notifBadge: {
+    position: 'absolute',
+    top: -3,
+    right: -3,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: COLORS.accent,
+    paddingHorizontal: 3,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: COLORS.primary,
+  },
+  notifBadgeText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: COLORS.white,
   },
   feedbackBar: {
     flexDirection: 'row',
@@ -387,11 +498,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     padding: 24,
     gap: 10,
-  },
-  loadingSubText: {
-    fontSize: 12,
-    color: COLORS.textSecondary,
-    textAlign: 'center',
   },
   noStudentsTitle: {
     fontSize: 16,

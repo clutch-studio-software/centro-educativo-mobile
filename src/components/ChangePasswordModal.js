@@ -11,39 +11,65 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '../theme/colors';
 
+const validatePasswordInputs = (currentPassword, newPassword, confirmPassword) => {
+  const cleanCurrent = String(currentPassword || '').trim();
+  const cleanNew = String(newPassword || '').trim();
+  const cleanConfirm = String(confirmPassword || '').trim();
+
+  if (!cleanCurrent) {
+    return { error: 'Debe ingresar su contraseña actual para continuar.' };
+  }
+  if (cleanNew.length < 6) {
+    return { error: 'La nueva contraseña debe tener al menos 6 caracteres.' };
+  }
+  if (cleanCurrent === cleanNew) {
+    return { error: 'La nueva contraseña debe ser diferente de la contraseña actual.' };
+  }
+  if (cleanNew !== cleanConfirm) {
+    return { error: 'Las contraseñas nuevas ingresadas no coinciden.' };
+  }
+  return { cleanCurrent, cleanNew };
+};
+
 const ChangePasswordModal = ({
   visible,
   isMandatory = false,
   onClose,
   onSubmitPasswordChange,
 }) => {
+  const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [showCurrentPwd, setShowCurrentPwd] = useState(false);
   const [showPwd, setShowPwd] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
 
+  const handleCloseModal = () => {
+    setError('');
+    setSuccessMsg('');
+    setCurrentPassword('');
+    setNewPassword('');
+    setConfirmPassword('');
+    if (onClose) onClose();
+  };
+
   const handleSave = async () => {
     setError('');
     setSuccessMsg('');
 
-    const cleanNew = String(newPassword || '').trim();
-    const cleanConfirm = String(confirmPassword || '').trim();
-
-    if (cleanNew.length < 6) {
-      setError('La nueva contraseña debe tener al menos 6 caracteres.');
-      return;
-    }
-    if (cleanNew !== cleanConfirm) {
-      setError('Las contraseñas ingresadas no coinciden.');
+    const validation = validatePasswordInputs(currentPassword, newPassword, confirmPassword);
+    if (validation.error) {
+      setError(validation.error);
       return;
     }
 
     setSubmitting(true);
     try {
-      await onSubmitPasswordChange(cleanNew);
+      await onSubmitPasswordChange(validation.cleanCurrent, validation.cleanNew);
       setSuccessMsg('Contraseña actualizada correctamente.');
+      setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
       setTimeout(() => {
@@ -57,8 +83,21 @@ const ChangePasswordModal = ({
     }
   };
 
+  const modalTitle = isMandatory ? 'Cambio de Contraseña Obligatorio' : 'Actualizar Contraseña';
+  const modalSubtitle = isMandatory
+    ? 'Por seguridad institucional, ingrese su clave inicial (DNI) y defina una nueva contraseña personal.'
+    : 'Verifique su contraseña actual y defina su nueva clave de acceso.';
+  const currentEyeIcon = showCurrentPwd ? 'eye-off-outline' : 'eye-outline';
+  const newEyeIcon = showPwd ? 'eye-off-outline' : 'eye-outline';
+  const handleRequestClose = isMandatory ? undefined : handleCloseModal;
+
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={isMandatory ? () => {} : onClose}>
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={handleRequestClose}
+    >
       <View style={styles.overlay}>
         <View style={styles.card}>
           <View style={styles.headerRow}>
@@ -66,14 +105,8 @@ const ChangePasswordModal = ({
               <Ionicons name="key-outline" size={20} color={COLORS.accent} />
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.title}>
-                {isMandatory ? 'Cambio de Contraseña Obligatorio' : 'Actualizar Contraseña'}
-              </Text>
-              <Text style={styles.subtitle}>
-                {isMandatory
-                  ? 'Por seguridad institucional, debe reemplazar su clave inicial (DNI) antes de continuar.'
-                  : 'Ingrese su nueva clave de acceso para el portal móvil y web.'}
-              </Text>
+              <Text style={styles.title}>{modalTitle}</Text>
+              <Text style={styles.subtitle}>{modalSubtitle}</Text>
             </View>
           </View>
 
@@ -92,7 +125,28 @@ const ChangePasswordModal = ({
           ) : null}
 
           <View style={styles.fieldGroup}>
-            <Text style={styles.label}>Nueva Contraseña (mín. 6 caracteres)</Text>
+            <Text style={styles.label}>Contraseña Actual *</Text>
+            <View style={styles.inputWrap}>
+              <TextInput
+                style={styles.input}
+                value={currentPassword}
+                onChangeText={setCurrentPassword}
+                secureTextEntry={!showCurrentPwd}
+                placeholder="Ingrese su contraseña actual"
+                placeholderTextColor={COLORS.textMuted}
+                autoCapitalize="none"
+              />
+              <TouchableOpacity
+                onPress={() => setShowCurrentPwd(!showCurrentPwd)}
+                style={styles.eyeBtn}
+              >
+                <Ionicons name={currentEyeIcon} size={18} color={COLORS.textSecondary} />
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          <View style={styles.fieldGroup}>
+            <Text style={styles.label}>Nueva Contraseña (mín. 6 caracteres) *</Text>
             <View style={styles.inputWrap}>
               <TextInput
                 style={styles.input}
@@ -104,17 +158,13 @@ const ChangePasswordModal = ({
                 autoCapitalize="none"
               />
               <TouchableOpacity onPress={() => setShowPwd(!showPwd)} style={styles.eyeBtn}>
-                <Ionicons
-                  name={showPwd ? 'eye-off-outline' : 'eye-outline'}
-                  size={18}
-                  color={COLORS.textSecondary}
-                />
+                <Ionicons name={newEyeIcon} size={18} color={COLORS.textSecondary} />
               </TouchableOpacity>
             </View>
           </View>
 
           <View style={styles.fieldGroup}>
-            <Text style={styles.label}>Confirmar Nueva Contraseña</Text>
+            <Text style={styles.label}>Confirmar Nueva Contraseña *</Text>
             <TextInput
               style={styles.inputSingle}
               value={confirmPassword}
@@ -130,7 +180,7 @@ const ChangePasswordModal = ({
             {!isMandatory && (
               <TouchableOpacity
                 style={styles.cancelBtn}
-                onPress={onClose}
+                onPress={handleCloseModal}
                 disabled={submitting}
               >
                 <Text style={styles.cancelBtnText}>Cancelar</Text>

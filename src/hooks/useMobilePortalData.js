@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   collection,
   doc,
@@ -6,6 +6,7 @@ import {
   getDocs,
   onSnapshot,
   query,
+  updateDoc,
   where,
 } from 'firebase/firestore';
 import { auth, db } from '../services/firebase';
@@ -13,6 +14,15 @@ import {
   TRANSPORT_ROUTES,
   INITIAL_DISCIPLINES,
 } from '../utils/subscriptionRules';
+import { reconcileFamilyReceiptsInFirestore } from '../services/billingMobileService';
+import { acknowledgeStudentRecord } from '../services/servicesMobileService';
+import {
+  registerForPushNotificationsAsync,
+  triggerInstantPushNotification,
+  loadReadNotificationIds,
+  persistReadNotificationIds,
+  buildInstitutionalNotificationsFeed,
+} from '../services/pushNotificationsService';
 
 const DEFAULT_SUBJECTS_BY_LEVEL = {
   inicial: [
@@ -51,7 +61,7 @@ const parseTeacherInfo = (profesorRaw) => {
   if (typeof profesorRaw === 'object' && profesorRaw !== null) {
     return profesorRaw;
   }
-  return { nombre: String(profesorRaw || 'Profesor a cargo') };
+  return { nombre: String(profesorRaw || 'A definir...') };
 };
 
 /**
@@ -139,6 +149,11 @@ export const useMobilePortalData = (user) => {
   const [financeReceipts, setFinanceReceipts] = useState([]);
   const [subjectsCatalog, setSubjectsCatalog] = useState([]);
   const [coursesCatalog, setCoursesCatalog] = useState([]);
+  const [directNotifications, setDirectNotifications] = useState([]);
+  const [readNotificationIds, setReadNotificationIds] = useState([]);
+
+  const knownNotificationIdsRef = useRef(new Set());
+  const initialNotificationsSyncedRef = useRef(false);
 
   const roleLower = String(user?.role || '').toLowerCase();
   const isStudentRole = roleLower.includes('estudiante') || roleLower.includes('alumno');
@@ -296,13 +311,193 @@ export const useMobilePortalData = (user) => {
       () => undefined
     );
 
+    // 5. Notificaciones institucionales directas
+    const unsubNotifications = onSnapshot(
+      collection(db, 'notifications'),
+      (snap) => {
+        const list = [];
+        snap.forEach((d) => {
+          list.push({ id: d.id, ...d.data() });
+        });
+        setDirectNotifications(list);
+      },
+      () => undefined
+    );
+
     return () => {
       unsubTariffs();
       unsubSports();
       unsubReceipts();
       unsubAcademic();
+      unsubNotifications();
     };
   }, [user]);
+
+  // Carga de IDs de notificaciones leídas y registro de token de Expo Push Notifications
+  useEffect(() => {
+    const uid = auth.currentUser?.uid || user?.uid;
+    if (!uid) {
+      knownNotificationIdsRef.current = new Set();
+      initialNotificationsSyncedRef.current = false;
+    }
+
+    let mounted = true;
+    void loadReadNotificationIds(uid).then((ids) => {
+      if (mounted) {
+        setReadNotificationIds(ids);
+      }
+    });
+
+    if (uid) {
+      void registerForPushNotificationsAsync(user);
+    }
+
+    return () => {
+      mounted = false;
+    };
+  }, [user]);
+
+  // Consolidación automática de recibos de la familia en Firestore (evita duplicados y completa desglose de hijos)
+  useEffect(() => {
+    if (!isParentRole || linkedStudents.length === 0 || financeReceipts.length === 0) {
+      return;
+    }
+    void reconcileFamilyReceiptsInFirestore({
+      tutorUser: user,
+      linkedStudents,
+      financeReceipts,
+      tariffsConfig,
+      allDisciplines,
+    });
+  }, [isParentRole, user, linkedStudents, financeReceipts, tariffsConfig, allDisciplines]);
+
+  // Feed unificado de notificaciones (Enfermería, Preceptoría, Inasistencias, Justificaciones y Pagos)
+  const notifications = useMemo(() => {
+    return buildInstitutionalNotificationsFeed({
+      user,
+      linkedStudents,
+      financeReceipts,
+      directNotifications,
+      readIds: readNotificationIds,
+      readIdsSet: new Set(readNotificationIds),
+    });
+  }, [user, linkedStudents, financeReceipts, directNotifications, readNotificationIds]);
+
+  const unreadNotificationsCount = useMemo(
+    () => notifications.filter((n) => !n.isRead && !n.read).length,
+    [notifications]
+  );
+
+  // Detección en tiempo real de nuevas notificaciones para disparar Push Notification con Expo
+  useEffect(() => {
+    if (loading || linkedStudents.length === 0) return;
+
+    if (!initialNotificationsSyncedRef.current) {
+      notifications.forEach((n) => knownNotificationIdsRef.current.add(n.id));
+      initialNotificationsSyncedRef.current = true;
+      return;
+    }
+
+    notifications.forEach((n) => {
+      if (!knownNotificationIdsRef.current.has(n.id)) {
+        knownNotificationIdsRef.current.add(n.id);
+        if (!n.isRead && !n.read) {
+          void triggerInstantPushNotification({
+            title: n.title,
+            body: n.body,
+            data: {
+              id: n.id,
+              category: n.category,
+              targetTab: n.targetTab,
+              studentId: n.studentId,
+            },
+          });
+        }
+      }
+    });
+  }, [loading, linkedStudents.length, notifications]);
+
+  const markNotificationAsRead = useCallback(
+    async (notifItem) => {
+      if (!notifItem?.id) return;
+      const uid = auth.currentUser?.uid || user?.uid;
+      setReadNotificationIds((prev) => {
+        const next = prev.includes(notifItem.id) ? prev : [...prev, notifItem.id];
+        if (uid) {
+          void persistReadNotificationIds(uid, next);
+        }
+        return next;
+      });
+
+      const fsDocId =
+        notifItem.firestoreDocId ||
+        (String(notifItem.id).startsWith('notif-doc-')
+          ? String(notifItem.id).replace('notif-doc-', '')
+          : String(notifItem.id).startsWith('fs-notif-')
+            ? String(notifItem.id).replace('fs-notif-', '')
+            : null);
+
+      if (fsDocId) {
+        try {
+          await updateDoc(doc(db, 'notifications', fsDocId), {
+            read: true,
+            leida: true,
+          });
+        } catch (_err) {
+          // Ignorar error de permisos o documento inexistente
+        }
+      }
+
+      if (isParentRole && notifItem.studentId && notifItem.recordType && notifItem.recordId) {
+        const studentDoc = linkedStudents.find(
+          (st) => String(st.id) === String(notifItem.studentId)
+        );
+        if (studentDoc) {
+          try {
+            const updatedStudent = await acknowledgeStudentRecord({
+              student: studentDoc,
+              recordType: notifItem.recordType,
+              recordId: notifItem.recordId,
+            });
+            setLinkedStudents((prev) =>
+              prev.map((s) =>
+                String(s.id) === String(updatedStudent.id) ? { ...s, ...updatedStudent } : s
+              )
+            );
+          } catch (_err) {
+            // Ignorar si ya estaba marcado o el rol no lo requiere
+          }
+        }
+      }
+    },
+    [user?.uid, isParentRole, linkedStudents]
+  );
+
+  const markAllNotificationsAsRead = useCallback(async () => {
+    const uid = auth.currentUser?.uid || user?.uid;
+    const allIds = notifications.map((n) => n.id);
+    setReadNotificationIds((prev) => {
+      const merged = Array.from(new Set([...prev, ...allIds]));
+      if (uid) {
+        void persistReadNotificationIds(uid, merged);
+      }
+      return merged;
+    });
+
+    notifications.forEach((n) => {
+      const fsDocId =
+        n.firestoreDocId ||
+        (String(n.id).startsWith('notif-doc-')
+          ? String(n.id).replace('notif-doc-', '')
+          : null);
+      if (fsDocId && (!n.isRead || !n.read)) {
+        void updateDoc(doc(db, 'notifications', fsDocId), {
+          read: true,
+          leida: true,
+        }).catch(() => undefined);
+      }
+    });
+  }, [user?.uid, notifications]);
 
   // Alumno actualmente seleccionado
   const currentStudent = useMemo(() => {
@@ -340,6 +535,10 @@ export const useMobilePortalData = (user) => {
     allDisciplines,
     routes: TRANSPORT_ROUTES,
     financeReceipts,
+    notifications,
+    unreadNotificationsCount,
+    markNotificationAsRead,
+    markAllNotificationsAsRead,
     updateStudentInState,
     refreshData: fetchLinkedChildren,
   };

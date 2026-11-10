@@ -310,40 +310,7 @@ export const enrollStudentInSport = async ({
 
   const todayStr = getTodayDateString(today);
 
-  // 6. Actualizar padrón en sportsActivities/{disciplineId}
-  const studentRosterEntry = {
-    id: student.id,
-    nombre:
-      student.nombreCompleto || `${student.nombre || ''} ${student.apellido || ''}`.trim(),
-    dni: student.dni || '',
-    legajo: student.legajo || student.studentID_login || `#EST-${student.id.slice(0, 5)}`,
-    curso: student.curso || 'Sin curso',
-    nivel: student.nivel || 'Primario',
-    fechaInscripcion: todayStr,
-  };
-
-  const nextInscriptos = [studentRosterEntry, ...inscriptos];
-  const sportRef = doc(db, 'sportsActivities', discipline.id);
-  await setDoc(
-    sportRef,
-    {
-      id: discipline.id,
-      nombre: discipline.nombre,
-      emoji: discipline.emoji || '🏅',
-      profesor: discipline.profesor || { nombre: 'Profesor asignado' },
-      niveles: discipline.niveles || 'Todos los niveles',
-      dias: discipline.dias || [],
-      horario: discipline.horario || '',
-      lugar: discipline.lugar || 'Campo de Deportes',
-      cupoMax,
-      inscriptos: nextInscriptos,
-      cupoOcupado: nextInscriptos.length,
-      updatedAt: serverTimestamp(),
-    },
-    { merge: true }
-  );
-
-  // 7. Actualizar perfil del alumno en students/{studentId} (solo allowedFields)
+  // 6. Actualizar perfil del alumno en students/{studentId} (solo allowedFields)
   const currentDeportes = Array.isArray(student.deportes) ? [...student.deportes] : [];
   if (!currentDeportes.includes(discipline.id)) {
     currentDeportes.push(discipline.id);
@@ -367,6 +334,52 @@ export const enrollStudentInSport = async ({
   };
 
   await updateDoc(doc(db, 'students', student.id), studentUpdates);
+
+  // 7. Sincronizar padrón en sportsActivities/{disciplineId}
+  const studentRosterEntry = {
+    id: student.id,
+    nombre:
+      student.nombreCompleto || `${student.nombre || ''} ${student.apellido || ''}`.trim(),
+    dni: student.dni || '',
+    legajo: student.legajo || student.studentID_login || `#EST-${student.id.slice(0, 5)}`,
+    curso: student.curso || 'Sin curso',
+    nivel: student.nivel || 'Primario',
+    fechaInscripcion: todayStr,
+  };
+
+  const nextInscriptos = [studentRosterEntry, ...inscriptos];
+  try {
+    const sportRef = doc(db, 'sportsActivities', discipline.id);
+    const sportSnap = await getDoc(sportRef);
+    if (sportSnap.exists()) {
+      await updateDoc(sportRef, {
+        inscriptos: nextInscriptos,
+        cupoOcupado: nextInscriptos.length,
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      await setDoc(
+        sportRef,
+        {
+          id: discipline.id,
+          nombre: discipline.nombre,
+          emoji: discipline.emoji || '🏅',
+          profesor: discipline.profesor || { nombre: 'Profesor asignado' },
+          niveles: discipline.niveles || 'Todos los niveles',
+          dias: discipline.dias || [],
+          horario: discipline.horario || '',
+          lugar: discipline.lugar || 'Campo de Deportes',
+          cupoMax,
+          inscriptos: nextInscriptos,
+          cupoOcupado: nextInscriptos.length,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+    }
+  } catch (err) {
+    console.warn('Aviso sincronizando padrón deportivo:', err?.message);
+  }
 
   return {
     ...student,
