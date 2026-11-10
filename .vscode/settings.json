@@ -1,0 +1,6 @@
+{
+    "sonarlint.connectedMode.project": {
+        "connectionId": "clutch-studio-software",
+        "projectKey": "clutch-studio-software_centro-educativo-mobile"
+    }
+}
