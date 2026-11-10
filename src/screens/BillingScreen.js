@@ -2250,12 +2250,6 @@ const styles = StyleSheet.create({
     color: COLORS.textSecondary,
     marginTop: 2,
   },
-  voucherItemsCovered: {
-    fontSize: 11,
-    color: COLORS.emerald,
-    fontWeight: '600',
-    marginTop: 3,
-  },
   openFileBtn: {
     flexDirection: 'row',
     width: '100%',

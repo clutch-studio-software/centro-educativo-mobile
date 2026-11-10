@@ -6,9 +6,12 @@ import {
   signInWithCustomToken,
   signOut,
   updatePassword,
+  updateEmail,
+  EmailAuthProvider,
+  reauthenticateWithCredential,
   sendPasswordResetEmail,
 } from 'firebase/auth';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { auth, db, FUNCTIONS_BASE_URL } from '../services/firebase';
 
 const STORAGE_USER_KEY = '@educar_transformar_mobile_user';
@@ -164,6 +167,68 @@ const loginWithEmailAndDniFallback = async (cleanId, rawPwd) => {
   }
 };
 
+/**
+ * Verifica que la contraseña actual del estudiante sea correcta contra cf_loginStudent.
+ */
+const verifyStudentCurrentPassword = async (userProfile, currentPassword) => {
+  const rawLegajo = String(
+    userProfile?.studentID_login || userProfile?.legajo || userProfile?.dni || ''
+  ).trim();
+  if (!rawLegajo) {
+    throw new Error('No se pudo identificar el legajo del estudiante para validar su clave.');
+  }
+
+  const normalizedLegajo = rawLegajo.startsWith('#') ? rawLegajo.slice(1) : rawLegajo;
+  const candidateLegajos = Array.from(new Set([normalizedLegajo, `#${normalizedLegajo}`]));
+  const alternatePwd = buildAlternateDniPassword(currentPassword);
+  const candidatePasswords = alternatePwd
+    ? [currentPassword, alternatePwd]
+    : [currentPassword];
+
+  for (const leg of candidateLegajos) {
+    for (const pwd of candidatePasswords) {
+      const res = await fetch(`${FUNCTIONS_BASE_URL}/cf_loginStudent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ studentID_login: leg, password: pwd }),
+      });
+      if (res.ok) {
+        return true;
+      }
+    }
+  }
+
+  throw new Error('La contraseña actual ingresada es incorrecta.');
+};
+
+/**
+ * Re-autentica al tutor en Firebase Auth validando su contraseña actual (con tolerancia de formato DNI).
+ */
+const reauthenticateTutorWithFallback = async (firebaseUser, userProfile, currentPassword) => {
+  const email = String(firebaseUser?.email || userProfile?.email || '').trim();
+  if (!email) {
+    throw new Error('No se encontró el correo electrónico de la sesión actual.');
+  }
+
+  try {
+    const cred = EmailAuthProvider.credential(email, currentPassword);
+    await reauthenticateWithCredential(firebaseUser, cred);
+    return true;
+  } catch (_err) {
+    const alternatePwd = buildAlternateDniPassword(currentPassword);
+    if (alternatePwd && alternatePwd !== currentPassword) {
+      try {
+        const altCred = EmailAuthProvider.credential(email, alternatePwd);
+        await reauthenticateWithCredential(firebaseUser, altCred);
+        return true;
+      } catch (_retryErr) {
+        // Continuar para arrojar mensaje claro
+      }
+    }
+    throw new Error('La contraseña actual ingresada es incorrecta.');
+  }
+};
+
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -289,57 +354,159 @@ export const AuthProvider = ({ children }) => {
     await sendPasswordResetEmail(auth, cleanEmail);
   }, []);
 
-  /**
-   * Cambio de contraseña y limpieza del flag mustChangePassword en Firestore
-   */
+const extractPasswordChangeArgs = (currentPasswordOrObj, maybeNewPassword) => {
+  const isObj = typeof currentPasswordOrObj === 'object' && currentPasswordOrObj !== null;
+  const rawCurrent = isObj
+    ? currentPasswordOrObj.currentPassword
+    : maybeNewPassword !== undefined
+      ? currentPasswordOrObj
+      : '';
+  const rawNew = isObj
+    ? currentPasswordOrObj.newPassword
+    : maybeNewPassword !== undefined
+      ? maybeNewPassword
+      : currentPasswordOrObj;
+  return {
+    cleanCurrent: String(rawCurrent || '').trim(),
+    cleanNew: String(rawNew || '').trim(),
+  };
+};
+
+const executeStudentPasswordChange = async (user, cleanCurrent, cleanNew) => {
+  await verifyStudentCurrentPassword(user, cleanCurrent);
+  const idToken = await auth.currentUser.getIdToken(true);
+  const response = await fetch(`${FUNCTIONS_BASE_URL}/cf_changeStudentPassword`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${idToken}`,
+    },
+    body: JSON.stringify({
+      studentId: user.uid,
+      newPassword: cleanNew,
+    }),
+  });
+
+  if (!response.ok) {
+    const errData = await response.json().catch(() => ({}));
+    throw new Error(errData.error || 'Error al actualizar la contraseña del estudiante.');
+  }
+};
+
+const executeTutorPasswordChange = async (user, cleanCurrent, cleanNew) => {
+  await reauthenticateTutorWithFallback(auth.currentUser, user, cleanCurrent);
+  await updatePassword(auth.currentUser, cleanNew);
+
+  const idToken = await auth.currentUser.getIdToken(true);
+  const response = await fetch(`${FUNCTIONS_BASE_URL}/cf_completePasswordChange`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${idToken}`,
+    },
+  });
+
+  if (!response.ok) {
+    const errData = await response.json().catch(() => ({}));
+    throw new Error(
+      errData.error || 'Error al confirmar el cambio de contraseña en el servidor.'
+    );
+  }
+};
   const changePassword = useCallback(
-    async (newPassword) => {
+    async (currentPasswordOrObj, maybeNewPassword) => {
       if (!user || !auth.currentUser) {
         throw new Error('No hay una sesión activa para cambiar la contraseña.');
       }
-      if (!newPassword || String(newPassword).trim().length < 6) {
+
+      const { cleanCurrent, cleanNew } = extractPasswordChangeArgs(
+        currentPasswordOrObj,
+        maybeNewPassword
+      );
+
+      if (!cleanCurrent) {
+        throw new Error('Por favor ingrese su contraseña actual para verificar su identidad.');
+      }
+      if (!cleanNew || cleanNew.length < 6) {
         throw new Error('La nueva contraseña debe tener al menos 6 caracteres.');
       }
-
-      const idToken = await auth.currentUser.getIdToken(true);
+      if (cleanCurrent === cleanNew) {
+        throw new Error('La nueva contraseña debe ser diferente de la contraseña actual.');
+      }
 
       if (user.role === 'Estudiante') {
-        const response = await fetch(`${FUNCTIONS_BASE_URL}/cf_changeStudentPassword`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${idToken}`,
-          },
-          body: JSON.stringify({
-            studentId: user.uid,
-            newPassword,
-          }),
-        });
-
-        if (!response.ok) {
-          const errData = await response.json().catch(() => ({}));
-          throw new Error(errData.error || 'Error al actualizar la contraseña del estudiante.');
-        }
+        await executeStudentPasswordChange(user, cleanCurrent, cleanNew);
       } else {
-        await updatePassword(auth.currentUser, newPassword);
-
-        const response = await fetch(`${FUNCTIONS_BASE_URL}/cf_completePasswordChange`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${idToken}`,
-          },
-        });
-
-        if (!response.ok) {
-          const errData = await response.json().catch(() => ({}));
-          throw new Error(errData.error || 'Error al confirmar el cambio de contraseña en el servidor.');
-        }
+        await executeTutorPasswordChange(user, cleanCurrent, cleanNew);
       }
 
       const updatedUser = { ...user, mustChangePassword: false };
       setUser(updatedUser);
       await AsyncStorage.setItem(STORAGE_USER_KEY, JSON.stringify(updatedUser));
+    },
+    [user]
+  );
+
+  /**
+   * Actualización de datos de contacto permitidos para el Tutor ("Mi Perfil"):
+   * Solo correo electrónico, teléfono y domicilio. El alumno no puede modificar ningún dato.
+   */
+  const updateTutorProfile = useCallback(
+    async ({ email, telefono, domicilio }) => {
+      if (!user || !auth.currentUser) {
+        throw new Error('No hay una sesión activa para actualizar el perfil.');
+      }
+
+      const roleLower = String(user.role || '').toLowerCase();
+      if (roleLower.includes('estudiante') || roleLower.includes('alumno')) {
+        throw new Error(
+          'Los estudiantes no tienen permisos para modificar datos de su perfil institucional.'
+        );
+      }
+
+      const cleanEmail = String(email || '').trim();
+      const cleanTelefono = String(telefono || '').trim();
+      const cleanDomicilio = String(domicilio || '').trim();
+
+      if (!cleanEmail || !cleanEmail.includes('@') || !cleanEmail.includes('.')) {
+        throw new Error('Ingrese un correo electrónico válido.');
+      }
+      if (!cleanTelefono || cleanTelefono.length < 6) {
+        throw new Error('Ingrese un número de teléfono de contacto válido.');
+      }
+      if (!cleanDomicilio || cleanDomicilio.length < 4) {
+        throw new Error('Ingrese un domicilio válido.');
+      }
+
+      const uid = auth.currentUser.uid || user.uid;
+      await updateDoc(doc(db, 'users', uid), {
+        email: cleanEmail,
+        telefono: cleanTelefono,
+        domicilio: cleanDomicilio,
+        updatedAt: serverTimestamp(),
+      });
+
+      if (
+        auth.currentUser.email &&
+        cleanEmail.toLowerCase() !== auth.currentUser.email.toLowerCase()
+      ) {
+        try {
+          await updateEmail(auth.currentUser, cleanEmail);
+        } catch (_err) {
+          // Si Firebase Auth requiere verificación por link o reautenticación reciente,
+          // el perfil institucional en users/{uid} ya quedó actualizado.
+        }
+      }
+
+      const updatedUser = {
+        ...user,
+        email: cleanEmail,
+        telefono: cleanTelefono,
+        domicilio: cleanDomicilio,
+      };
+      setUser(updatedUser);
+      await AsyncStorage.setItem(STORAGE_USER_KEY, JSON.stringify(updatedUser));
+      return updatedUser;
     },
     [user]
   );
@@ -365,9 +532,10 @@ export const AuthProvider = ({ children }) => {
       login,
       logout,
       changePassword,
+      updateTutorProfile,
       resetPasswordByEmail,
     }),
-    [user, loading, login, logout, changePassword, resetPasswordByEmail]
+    [user, loading, login, logout, changePassword, updateTutorProfile, resetPasswordByEmail]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
