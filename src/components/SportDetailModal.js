@@ -290,7 +290,7 @@ const SportDetailModal = ({
                 <View style={{ flex: 1 }}>
                   <Text style={styles.metaTitle}>Días y Horarios</Text>
                   <Text style={styles.metaDesc}>
-                    {discipline.horario || 'A definir.'}
+                    {diasTexto} · {discipline.horario || '16:00 - 17:30 hs'}
                   </Text>
                 </View>
               </View>
