@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Modal,
   View,
@@ -9,6 +9,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '../theme/colors';
+import { formatNotificationTimestamp } from '../services/pushNotificationsService';
 
 const resolveCategoryVisuals = (category) => {
   switch (category) {
@@ -71,9 +72,12 @@ const resolveCategoryVisuals = (category) => {
   }
 };
 
-const NotificationItemCard = ({ item, onPressItem }) => {
+const NotificationItemCard = ({ item, nowMs, onPressItem }) => {
   const visuals = resolveCategoryVisuals(item.category);
   const isRead = Boolean(item.isRead || item.read);
+  const formattedDate = Number.isFinite(item.timestampMs)
+    ? formatNotificationTimestamp(item.timestampMs, item.dateLabel, nowMs)
+    : item.dateLabel;
 
   return (
     <TouchableOpacity
@@ -92,7 +96,7 @@ const NotificationItemCard = ({ item, onPressItem }) => {
               {visuals.tag}
             </Text>
           </View>
-          <Text style={styles.dateText}>{item.dateLabel}</Text>
+          <Text style={styles.dateText}>{formattedDate}</Text>
         </View>
 
         <Text style={[styles.notifTitle, !isRead && styles.notifTitleUnread]}>
@@ -114,6 +118,22 @@ const NotificationsModal = ({
   onMarkAllAsRead,
   onSelectNotification,
 }) => {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!visible) return undefined;
+    const immediateId = setTimeout(() => {
+      setNowMs(Date.now());
+    }, 0);
+    const intervalId = setInterval(() => {
+      setNowMs(Date.now());
+    }, 60 * 1000);
+    return () => {
+      clearTimeout(immediateId);
+      clearInterval(intervalId);
+    };
+  }, [visible]);
+
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <View style={styles.overlay}>
@@ -175,6 +195,7 @@ const NotificationsModal = ({
                 <NotificationItemCard
                   key={item.id}
                   item={item}
+                  nowMs={nowMs}
                   onPressItem={onSelectNotification}
                 />
               ))
