@@ -20,7 +20,7 @@ const getEnvVar = (key, fallback = '') => {
 };
 
 export const firebaseConfig = {
-  apiKey: getEnvVar('FIREBASE_API_KEY', 'dummy-api-key'),
+  apiKey: getEnvVar('FIREBASE_API_KEY', 'AIzaSyDQBil65xOmvidSysxcobV2sYOQyHXD7Zk'),
   authDomain: getEnvVar(
     'FIREBASE_AUTH_DOMAIN',
     'centro-educativo-f5cc5.firebaseapp.com'
@@ -28,10 +28,10 @@ export const firebaseConfig = {
   projectId: getEnvVar('FIREBASE_PROJECT_ID', 'centro-educativo-f5cc5'),
   storageBucket: getEnvVar(
     'FIREBASE_STORAGE_BUCKET',
-    'centro-educativo-f5cc5.appspot.com'
+    'centro-educativo-f5cc5.firebasestorage.app'
   ),
-  messagingSenderId: getEnvVar('FIREBASE_MESSAGING_SENDER_ID', ''),
-  appId: getEnvVar('FIREBASE_APP_ID', ''),
+  messagingSenderId: getEnvVar('FIREBASE_MESSAGING_SENDER_ID', '685747120332'),
+  appId: getEnvVar('FIREBASE_APP_ID', '1:685747120332:web:e4c7b275e62e9e56d43a69'),
 };
 
 export const FUNCTIONS_BASE_URL = getEnvVar(
