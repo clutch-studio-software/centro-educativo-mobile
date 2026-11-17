@@ -11,6 +11,15 @@
       "distribution": "internal",
       "android": {
         "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_FIREBASE_API_KEY": "AIzaSyDQBil65xOmvidSysxcobV2sYOQyHXD7Zk",
+        "EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN": "centro-educativo-f5cc5.firebaseapp.com",
+        "EXPO_PUBLIC_FIREBASE_PROJECT_ID": "centro-educativo-f5cc5",
+        "EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET": "centro-educativo-f5cc5.firebasestorage.app",
+        "EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID": "685747120332",
+        "EXPO_PUBLIC_FIREBASE_APP_ID": "1:685747120332:web:e4c7b275e62e9e56d43a69",
+        "EXPO_PUBLIC_FUNCTIONS_BASE_URL": "https://us-central1-centro-educativo-f5cc5.cloudfunctions.net/"
       }
     },
     "production": {

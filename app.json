@@ -30,7 +30,9 @@
           "icon": "./assets/icon.png",
           "color": "#EA580C"
         }
-      ]
+      ],
+      "expo-sharing",
+      "expo-status-bar"
     ],
     "extra": {
       "eas": {
